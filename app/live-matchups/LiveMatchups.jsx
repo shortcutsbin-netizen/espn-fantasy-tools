@@ -1,3 +1,4 @@
+import ToolControls from "../shared/ToolControls.jsx";
 import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { PALETTES, BASE_CSS, BACKDROP } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
@@ -1194,9 +1195,6 @@ export default function LiveMatchups() {
     (typeof document !== "undefined" && document.documentElement.dataset.theme) ||
     (readCookie(THEME_COOKIE) === "light" ? "light" : "dark"));
   const [tz, setTz] = useState(() => readSiteTz());
-  const [showHelp, setShowHelp] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const gearRef = useRef(null);
   const [week, setWeek] = useState(0); // 0 = whatever the server calls current
 
   /* Opens every card and every subsection at once. Its first use is
@@ -1692,20 +1690,7 @@ export default function LiveMatchups() {
             <div className="toolleague">{leagueName}</div>
           </div>
           <div className="toolctl">
-            <button className="ctlbtn" onClick={() => setShowHelp(true)} title="How to use this tool" type="button">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="9.4" />
-                <path d="M9.2 9.3a2.8 2.8 0 1 1 3.9 2.9c-.9.5-1.4 1-1.4 2.1" />
-                <circle cx="12" cy="17.2" r=".55" fill="currentColor" stroke="none" />
-              </svg>
-            </button>
-            <button className="ctlbtn" id="gearBtn" ref={gearRef} title="Site settings"
-              aria-haspopup="dialog" type="button"
-              onClick={(e) => { e.stopPropagation(); setShowSettings((v) => !v); }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3.1" /><path d="M19.1 14.6a1.5 1.5 0 0 0 .3 1.7l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.5 1.5 0 0 0-1.7-.3 1.5 1.5 0 0 0-.9 1.4v.2a2 2 0 1 1-4 0v-.1a1.5 1.5 0 0 0-1-1.4 1.5 1.5 0 0 0-1.7.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.5 1.5 0 0 0 .3-1.7 1.5 1.5 0 0 0-1.4-.9H3a2 2 0 1 1 0-4h.1a1.5 1.5 0 0 0 1.4-1 1.5 1.5 0 0 0-.3-1.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.5 1.5 0 0 0 1.7.3H9a1.5 1.5 0 0 0 .9-1.4V3a2 2 0 1 1 4 0v.1a1.5 1.5 0 0 0 .9 1.4 1.5 1.5 0 0 0 1.7-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.5 1.5 0 0 0-.3 1.7V9a1.5 1.5 0 0 0 1.4.9h.2a2 2 0 1 1 0 4h-.1a1.5 1.5 0 0 0-1.4.9z" /></svg>
-            </button>
-            <SettingsMenu open={showSettings} onClose={() => setShowSettings(false)}
-              theme={theme} onTheme={setTheme} anchorRef={gearRef} />
+            <ToolControls steps={HELP_STEPS} label="How to use Live Matchups" theme={theme} onTheme={setTheme} gearId="gearBtn" />
           </div>
         </div>
 
@@ -1767,10 +1752,6 @@ export default function LiveMatchups() {
         </div>
       </div>
 
-      {showHelp && (
-        <Instructions open steps={HELP_STEPS} onClose={() => setShowHelp(false)}
-          label="How to use Live Matchups" />
-      )}
     </div>
   );
 }
