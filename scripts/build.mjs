@@ -42,6 +42,13 @@ const TOOLS = [
     css: 'app/hall-of-fame/styles.css',
   },
   {
+    key: 'fortune-teller',
+    title: 'Fortune Teller',
+    entry: 'app/fortune-teller/main.jsx',
+    css: 'app/fortune-teller/styles.css',
+    worker: 'app/fortune-teller/worker.js',
+  },
+  {
     key: 'llm-export',
     title: 'LLM Data Export',
     entry: 'app/llm-export/main.jsx',
@@ -105,6 +112,10 @@ for (const tool of TOOLS) {
     `--outfile=${outDir}/bundle.js`,
     '--log-level=warning',
   ]);
+
+  if (tool.worker && existsSync(tool.worker)) {
+    run('npx', ['esbuild', tool.worker, '--bundle', '--format=iife', '--target=es2020', '--minify', `--outfile=${outDir}/worker.js`, '--log-level=warning']);
+  }
 
   if (existsSync(tool.css)) {
     run('npx', [
