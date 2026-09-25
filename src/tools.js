@@ -43,6 +43,13 @@ export const TOOLS = [
     defaultVisibility: VISIBILITY.VISIBLE,
   },
   {
+    key: 'fortune-teller',
+    name: 'Fortune Teller',
+    description: 'Every way the rest of the season can go, and where each leaves you.',
+    href: '/apps/fortune-teller/',
+    defaultVisibility: VISIBILITY.VISIBLE,
+  },
+  {
     key: 'llm-export',
     name: 'LLM Data Export',
     description: 'For those who wish to outsource their thinking.',
