@@ -9,6 +9,9 @@
  */
 
 import { llmExportPayload, applyLiveScoring } from './llmexport.js';
+import { fortuneTellerPayload, fortuneTellerMap, simOdds } from './fortuneteller.js';
+export { FortuneTellerDO } from './ftdo.js';
+import { FT_ACTIVE_KEY } from './ftdo.js';
 import { DATASETS, getDataset, planBatches, PARAM_DATASETS } from './datasets.js';
 import { loadConfig, saveConfig, describeConfig, isConfigured, isSetupFinished, canCallEspn } from './config.js';
 import { coordinatorRefresh } from './dedupe.js';
@@ -42,7 +45,7 @@ export { ScoreTimelineDO } from './scoretimeline.js';
 import { RELEASE_NOTE_ITEMS } from './release.js';
 import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r132';
+const BUILD_MARKER = 'r169';
 
 
 
@@ -95,8 +98,55 @@ export default {
     } catch (err) {
       console.log('scheduled logo pass failed:', String((err && err.stack) || err));
     }
+    try {
+      await fortuneTellerCheck(env);
+    } catch (err) {
+      console.log('scheduled Fortune Teller check failed:', String((err && err.stack) || err));
+    }
+    let nudge = null;
+    try {
+      nudge = await nudgeFortuneTeller(env);
+    } catch (err) {
+      nudge = 'failed: ' + String((err && err.message) || err);
+      console.log('scheduled Fortune Teller nudge failed:', String((err && err.stack) || err));
+    }
   },
 };
+
+/**
+ * Fortune Teller's pipeline check, every 15 minutes: the schedule and settings are brought
+ * up to date here (every read goes through ensureDataset), then the build object decides
+ * what should happen and starts it. Nothing runs until setup is finished.
+ */
+/** The league's number of playoff places, for the line under the last of them. */
+async function playoffPlaces(env, ctx) {
+  try { const s = await readDigest(env, 'league_settings', ctx); const n = s && s.settings && s.settings.scheduleSettings && s.settings.scheduleSettings.playoffTeamCount; return Number(n) || null; } catch { return null; }
+}
+
+async function fortuneTellerCheck(env) {
+  if (!env.FORTUNE || new Date().getUTCMinutes() % 15 !== 0) return;
+  const cfg = await loadConfig(env);
+  if (!isSetupFinished(cfg)) return;
+  await ensureDataset(env, 'season_schedule', null);
+  await ensureDataset(env, 'league_settings', null);
+  await ensureDataset(env, 'standings_digest', null);
+  await env.FORTUNE.get(env.FORTUNE.idFromName('fortune-teller')).fetch('https://ft/pipeline?reason=cron');
+}
+
+/**
+ * Keep a Fortune Teller build moving even if its own alarms stop being delivered
+ * (seen on dev: a build's alarms stopped for hours while every other request to
+ * the object worked). Runs last in the minute cron so it never delays the score
+ * timeline, and costs one small R2 read a minute while no build is active.
+ */
+async function nudgeFortuneTeller(env) {
+  if (!env.FORTUNE) return 'no binding';
+  const active = await env.DATA.get(FT_ACTIVE_KEY);
+  if (!active) return 'no build active';
+  const stub = env.FORTUNE.get(env.FORTUNE.idFromName('fortune-teller'));
+  const r = await stub.fetch('https://ft/tick');
+  return r.ok ? await r.json() : { status: r.status };
+}
 
 /**
  * Keep the stored team logos in step with ESPN.
@@ -387,6 +437,12 @@ async function route(request, env, ctx) {
   if (path === '/api/hof') return hallOfFame(env, ctx);
   if (path === '/api/trade') return tradeAnalyzer(env, ctx);
   if (path === '/api/llm-export') return llmExport(env, ctx, url);
+  if (path === '/api/fortune-teller') {
+    // The page before a map exists is built from the standings and the league's rules.
+    await Promise.all([ensureDataset(env, 'standings_digest', ctx), ensureDataset(env, 'league_settings', ctx), ensureDataset(env, 'season_schedule', ctx)]);
+    return json(await fortuneTellerPayload(env));
+  }
+  if (path.startsWith('/api/fortune-teller/map/')) return fortuneTellerMap(env, path.slice('/api/fortune-teller/map/'.length));
 
   if (path === '/api/img') return serveImage(request, url, ctx);
 
@@ -813,6 +869,24 @@ async function handleAdmin(request, env, cfg, path) {
     return json({ ok: true });
   }
 
+  if (path === '/api/admin/fortune-teller') {
+    // Switch Fortune Teller on or off, check now, or rebuild. The setting is handed to the
+    // pipeline directly: its own config cache may not see the save for a few seconds.
+    const action = String(body.action || '');
+    if (!['enable', 'disable', 'check', 'rebuild'].includes(action)) return json({ ok: false, error: 'unknown action' }, 400);
+    if (action === 'enable' || action === 'disable') await saveConfig(env, { fortuneTeller: { enabled: action === 'enable', changedAt: new Date().toISOString() } });
+    let pipeline = null;
+    if (env.FORTUNE) {
+      const stub = env.FORTUNE.get(env.FORTUNE.idFromName('fortune-teller'));
+      const now = action === 'enable' ? '&enabled=1' : action === 'disable' ? '&enabled=0' : '';
+      const r = await stub.fetch(`https://ft/pipeline?reason=admin-${action}${action === 'rebuild' ? '&force=1' : ''}${now}`);
+      pipeline = r.ok ? (await r.json()).pipeline : null;
+    }
+    const after = await loadConfig(env, { fresh: true });
+    const enabledNow = action === 'enable' ? true : action === 'disable' ? false : Boolean(after.fortuneTeller && after.fortuneTeller.enabled);
+    return json({ ok: true, enabled: enabledNow, pipeline });
+  }
+
   if (path === '/api/admin/trade-weights') {
     const next = {};
     for (const row of TRADE_ROWS) {
@@ -1049,13 +1123,14 @@ async function llmExportRoute(env, ctx, wantFresh = false) {
    * that moves minute to minute — is laid over the stored copy instead, which
    * costs a moment. */
   const digest = await llmExportDigest(env, ctx);
-  if (!wantFresh || !digest) return json(llmExportPayload(digest));
+  const sim = await simOdds(env);
+  if (!wantFresh || !digest) return json(llmExportPayload(digest, sim));
   const obj = await ensureDataset(env, 'live_scoring_digest', ctx);
   let live = null;
   if (obj) {
     try { live = await obj.json(); } catch { live = null; }
   }
-  return json(llmExportPayload(applyLiveScoring(digest, live)));
+  return json(llmExportPayload(applyLiveScoring(digest, live), sim));
 }
 
 /**
@@ -1322,8 +1397,10 @@ export async function boardPayload(env, ctx, teamId) {
     identified: Boolean(standings && standings.identified),
     standings: standings
       ? { started: standings.started, identified: Boolean(standings.identified),
-          rows: standings.rows.slice(0, 12) }
+          rows: standings.rows.slice(0, 12), places: await playoffPlaces(env, ctx) }
       : { started: false, identified: false, rows: [] },
+    // Fortune Teller's simulated odds for the Sim % column, or why there are none yet.
+    sim: await simOdds(env),
     transactions: (transactions && transactions.identified)
       ? ((transactions && transactions.items) || []) : [],
     myTeam: null,
