@@ -1,13 +1,21 @@
 # Keeps a fork up to date with the repository it was forked from.
 #
-# Two GitHub constraints shape this:
+# Three GitHub constraints shape this:
 #
 #   Workflows are disabled in a fork until its owner enables them once, from the
 #   Actions tab. There is no way to opt in on their behalf.
 #
-#   The fork holds one local edit — the KV namespace id in wrangler.jsonc — so
-#   this merges rather than force-syncing. A force sync would silently delete
-#   that id and break the deployment.
+#   The fork holds two local edits in wrangler.jsonc: the Worker's name and the
+#   KV namespace id. This merges rather than force-syncing, so both survive.
+#   Upstream changes elsewhere in wrangler.jsonc (a new binding, a migration,
+#   observability) merge cleanly. If an upstream change lands next to one of
+#   those two lines, the merge conflicts; the step below then takes upstream's
+#   wrangler.jsonc and puts this fork's name and KV id back into it. A conflict
+#   in any other file still stops here for a human.
+#
+#   This workflow's token cannot push changes to workflow files. When this file
+#   itself changes upstream, the automatic sync fails until the fork's owner
+#   clicks "Sync fork" then "Update branch" once on the fork's GitHub page.
 #
 # Upstream is discovered from the fork itself, so nothing here needs editing.
 
@@ -68,13 +76,33 @@ jobs:
             exit 0
           fi
 
-          # A merge preserves the local wrangler.jsonc edit. If upstream ever
-          # changes that same file the merge conflicts and this step fails,
-          # which is the correct outcome: it needs a human, not a silent
-          # overwrite of a live deployment's bindings.
           if ! git merge --no-edit "upstream/${branch}"; then
-            echo "::error::Merge conflict with upstream. Resolve it manually, most likely in wrangler.jsonc."
-            exit 1
+            # >>> resolve-wrangler
+            # Only a conflict confined to wrangler.jsonc is resolved automatically:
+            # upstream's file, with this fork's Worker name and KV namespace id put back.
+            conflicted=$(git diff --name-only --diff-filter=U)
+            if [ "$conflicted" != "wrangler.jsonc" ]; then
+              echo "::error::Merge conflict beyond wrangler.jsonc ($conflicted). Resolve it manually."
+              exit 1
+            fi
+            ours=$(git show HEAD:wrangler.jsonc)
+            name=$(printf '%s\n' "$ours" | grep -m1 -oE '^  "name": "[^"]*"' | sed -E 's/.*"name": "([^"]*)"/\1/')
+            kvid=$(printf '%s\n' "$ours" | grep -m1 -oE '"id": "[^"]*"' | sed -E 's/"id": "([^"]*)"/\1/')
+            if [ -z "$name" ] || [ -z "$kvid" ]; then
+              echo "::error::Could not read this fork's name or KV namespace id from wrangler.jsonc. Resolve it manually."
+              exit 1
+            fi
+            git show "upstream/${branch}:wrangler.jsonc" > wrangler.jsonc
+            sed -i -E "0,/^  \"name\": \"[^\"]*\"/s//  \"name\": \"${name}\"/" wrangler.jsonc
+            sed -i -E "0,/\"id\": \"[^\"]*\"/s//\"id\": \"${kvid}\"/" wrangler.jsonc
+            if ! grep -q "^  \"name\": \"${name}\"" wrangler.jsonc || ! grep -q "\"id\": \"${kvid}\"" wrangler.jsonc; then
+              echo "::error::Could not put this fork's name and KV namespace id back. Resolve it manually."
+              exit 1
+            fi
+            git add wrangler.jsonc
+            git commit --no-edit
+            echo "Resolved wrangler.jsonc: upstream's version, keeping this fork's name (${name}) and KV namespace id."
+            # <<< resolve-wrangler
           fi
 
           git push origin "${branch}"
