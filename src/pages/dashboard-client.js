@@ -342,8 +342,13 @@ var ST_COLS = [
   { key: 'diff',         label: 'Diff',     dir: -1 },
   { key: 'ppg',          label: 'PPG',      dir: -1 },
   { key: 'streak',       label: 'Strk',     dir: -1 },
-  { key: 'playoffPct',   label: 'Playoff%', dir: -1 }
+  { key: 'playoffPct',   label: 'Playoff%', dir: -1 },
+  { key: 'simPct',       label: 'Sim%',     dir: -1 }
 ];
+/* Sim % appears only once a real simulation has run; until then the column is not there at all. */
+function stCols() { return stSim && stSim.byTeam ? ST_COLS : ST_COLS.filter(function (c) { return c.key !== 'simPct'; }); }
+/* Fortune Teller's simulated odds, or why there are none yet; set by every status poll. */
+var stSim = null;
 var stSort = { key: 'rank', dir: 1 };
 
 function stDerived(r) {
@@ -370,7 +375,8 @@ function stValue(r, key) {
     if (!m) return -999;
     return (m[1] === 'W' ? 1 : -1) * Number(m[2]);
   }
-  if (key === 'playoffPct') return r.playoffPct == null ? -1 : r.playoffPct;
+  if (key === 'playoffPct') { var fin = stFinal(r); return fin != null ? fin : (r.playoffPct == null ? -1 : r.playoffPct); }
+  if (key === 'simPct') { var sv = stSim && stSim.byTeam ? stSim.byTeam[r.teamId] : null; return sv == null ? -1 : sv; }
   return r[key] == null ? -1 : r[key];
 }
 
@@ -381,13 +387,29 @@ function stMedal(rank) {
   return String(rank);
 }
 
+/* After the regular season every team is in or out: its final seed decides, not ESPN's last figure. */
+function stFinal(r) { var f = stSim && stSim.final; return f && f.seasonOver && f.inByTeam && f.inByTeam[r.teamId] != null ? (f.inByTeam[r.teamId] ? 1 : 0) : null; }
+
 function stOdds(r) {
+  var fin = stFinal(r);
+  if (fin != null) return fin ? '<span class="stflag in">Clinched</span>' : '<span class="stflag out">Eliminated</span>';
   if (r.playoffPct == null) return '<span class="dim">&mdash;</span>';
   /* At the extremes the number has stopped being a probability. Printing
      "100%" invites a reader to wonder what the other nothing per cent is. */
   if (r.playoffPct >= 0.9995) return '<span class="stflag in">Clinched</span>';
   if (r.playoffPct <= 0.0005) return '<span class="stflag out">Eliminated</span>';
   return '<span class="stpct">' + (r.playoffPct * 100).toFixed(1) + '%</span>';
+}
+
+/* Sim %: the same markers as Playoff % at the extremes; before the simulation has run, the
+   reason it has not, and while a week is being folded in, last week's figure, dimmed. */
+function stSimCell(r) {
+  var s = stSim, v = s && s.byTeam ? s.byTeam[r.teamId] : null;
+  if (v == null) return '<span class="dim">&mdash;</span>';
+  var cell = v >= 0.9995 ? '<span class="stflag in">Clinched</span>'
+    : v <= 0.0005 ? '<span class="stflag out">Eliminated</span>'
+    : '<span class="stpct">' + (v * 100).toFixed(1) + '%</span>';
+  return s.state === 'updating' ? '<span class="stupd" title="Updating for the week just played">' + cell + '</span>' : cell;
 }
 
 /**
@@ -493,7 +515,9 @@ function renderStandings(st) {
     return (a.rank || 0) - (b.rank || 0);
   });
 
-  var head = ST_COLS.map(function (c) {
+  var cols = stCols();
+  if (!cols.some(function (c) { return c.key === stSort.key; })) stSort = { key: 'rank', dir: 1 };
+  var head = cols.map(function (c) {
     var on = stSort.key === c.key;
     var aria = on ? (stSort.dir === 1 ? 'ascending' : 'descending') : 'none';
     return '<th class="' + (c.cls || '') + '" aria-sort="' + aria + '" data-sort="' + c.key + '">' +
@@ -518,7 +542,11 @@ function renderStandings(st) {
       '<td class="c-num">' + d.ppg.toFixed(1) + '</td>' +
       '<td class="' + (!r.streak ? 'c-muted' : (r.streak.charAt(0) === 'W' ? 'c-pos' : 'c-neg')) + '">' +
         esc(r.streak || '\u2014') + '</td>' +
-      '<td class="c-num">' + stOdds(r) + '</td></tr>';
+      '<td class="c-num">' + stOdds(r) + '</td>' +
+      (stSim && stSim.byTeam ? '<td class="c-num">' + stSimCell(r) + '</td>' : '') + '</tr>' +
+      /* The line under the last playoff place, in standings order only: sorted any other way it would mark nothing. */
+      (stSort.key === 'rank' && stSort.dir === 1 && st.places && r.rank === st.places && st.places < rows.length
+        ? '<tr class="porow" aria-hidden="true"><td colspan="' + cols.length + '"><span><i></i>Playoffs</span></td></tr>' : '');
   }).join('');
 
   /* Sorting replaces the rows, never the scrolling element: rebuilding the
@@ -657,6 +685,7 @@ document.getElementById('ranges').addEventListener('click', function (e) {
 
 function paintBoard(d) {
   if (!d) return;
+  stSim = d.sim || null;
   renderStandings(d.standings);
   renderCard(d.myTeam, d.identified);
   renderInjuries(d.injuries || [], !!d.myTeam);
