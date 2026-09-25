@@ -188,6 +188,14 @@ export const DASHBOARD_CSS = `
               text-transform:uppercase; padding:3px 8px; border:1px solid currentColor; }
     .stflag.in { color:var(--accent); }
     .stflag.out { color:var(--flag); }
+    .stupd { opacity:.55; }
+    /* The line under the last playoff place, drawn as Fortune Teller draws it. */
+    table.stbl tr.porow td { padding:0; height:20px; border:0; position:relative; background:transparent; }
+    table.stbl tr.porow td::before { content:""; position:absolute; left:0; right:0; top:50%; height:1px;
+      background:repeating-linear-gradient(90deg,var(--accent) 0 7px,transparent 7px 11px); opacity:.9; }
+    table.stbl tr.porow td span { position:absolute; left:10px; top:50%; transform:translateY(-50%); z-index:2; display:inline-flex; align-items:center; gap:6px; padding:0 7px 0 5px;
+      font-size:7.5px; font-weight:900; letter-spacing:.18em; text-transform:uppercase; color:var(--accent); background:var(--panel); line-height:1; }
+    table.stbl tr.porow td span i { width:6px; height:6px; background:var(--accent); transform:rotate(45deg); box-shadow:0 0 8px var(--accent-glow); }
     .stbl tr.me td { background:var(--accent-glow); }
 
     /* injuries */
