@@ -1,0 +1,5 @@
+@import "tailwindcss";
+
+/* The tool renders inside a fixed dark shell; these two rules keep the page
+   background consistent before the bundle mounts. */
+html, body { margin: 0; background: #0A0D0B; }
