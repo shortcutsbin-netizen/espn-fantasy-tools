@@ -19,25 +19,36 @@ function isRecord(v) {
     || (Array.isArray(x) ? x : Object.values(x)).every((y) => y === null || typeof y !== 'object'));
 }
 
+/* Both are cached per object. The export's data is never modified once built, so a
+   subtree's text depends only on the object (and, formatted, on its indent and whether
+   it sits in a list). Each level otherwise re-serialised its whole subtree to test the
+   one-line fit, and picking another team re-formatted sections it had not touched. */
+const INLINE = new WeakMap();
 function inline(v) {
   if (v === null || typeof v !== 'object') return JSON.stringify(v);
-  if (Array.isArray(v)) return v.length ? `[${v.map(inline).join(', ')}]` : '[]';
-  const keys = Object.keys(v);
-  return keys.length ? `{${keys.map((k) => `${JSON.stringify(k)}: ${inline(v[k])}`).join(', ')}}` : '{}';
+  const hit = INLINE.get(v); if (hit !== undefined) return hit;
+  let out;
+  if (Array.isArray(v)) out = v.length ? `[${v.map(inline).join(', ')}]` : '[]';
+  else { const keys = Object.keys(v); out = keys.length ? `{${keys.map((k) => `${JSON.stringify(k)}: ${inline(v[k])}`).join(', ')}}` : '{}'; }
+  INLINE.set(v, out); return out;
 }
 
+const FORMATTED = new WeakMap();
 function fmt(v, indent, inList) {
   if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  const key = indent.length + (inList ? 'L' : 'O');
+  let seen = FORMATTED.get(v);
+  if (seen) { const hit = seen.get(key); if (hit !== undefined) return hit; } else { seen = new Map(); FORMATTED.set(v, seen); }
+  let out;
   const one = inline(v);
-  if (indent.length + one.length <= WIDTH || (inList && isRecord(v) && one.length <= RECORD_WIDTH)) {
-    return one;
+  if (indent.length + one.length <= WIDTH || (inList && isRecord(v) && one.length <= RECORD_WIDTH)) out = one;
+  else {
+    const next = `${indent}  `;
+    out = Array.isArray(v)
+      ? `[\n${v.map((x) => next + fmt(x, next, true)).join(',\n')}\n${indent}]`
+      : `{\n${Object.keys(v).map((k) => `${next}${JSON.stringify(k)}: ${fmt(v[k], next, false)}`).join(',\n')}\n${indent}}`;
   }
-  const next = `${indent}  `;
-  if (Array.isArray(v)) {
-    return `[\n${v.map((x) => next + fmt(x, next, true)).join(',\n')}\n${indent}]`;
-  }
-  return `{\n${Object.keys(v).map((k) => `${next}${JSON.stringify(k)}: ${fmt(v[k], next, false)}`)
-    .join(',\n')}\n${indent}}`;
+  seen.set(key, out); return out;
 }
 
 export function formatExport(doc) {
@@ -45,12 +56,22 @@ export function formatExport(doc) {
 }
 
 /** Where each top-level section starts and how much of the file it is. */
+/* A section's size is measured once per section object: picking another team rebuilds
+   only the sections it changes, so the rest reuse their size exactly. */
+const SIZE_CACHE = new WeakMap();
+function sectionBytes(v) {
+  if (v && typeof v === 'object') { const hit = SIZE_CACHE.get(v); if (hit !== undefined) return hit; }
+  const n = new TextEncoder().encode(inline(v)).length;
+  if (v && typeof v === 'object') SIZE_CACHE.set(v, n);
+  return n;
+}
+
 export function sectionMap(doc, text) {
   const lines = text.split('\n');
   const total = new TextEncoder().encode(text).length;
   return Object.keys(doc).map((key) => {
     const line = lines.findIndex((l) => l.startsWith(`  ${JSON.stringify(key)}:`));
-    const bytes = new TextEncoder().encode(inline(doc[key])).length;
+    const bytes = sectionBytes(doc[key]);
     return { key, line, bytes, share: total ? bytes / total : 0 };
   });
 }
@@ -67,7 +88,15 @@ const esc = (s) => s.replace(/[&<>"]/g, (c) => ESC[c]);
    string is never mistaken for structure; a string followed by a colon is a key. */
 const TOKEN = /("(?:[^"\\]|\\.)*")(\s*:)?|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|\b(true|false|null)\b|([{}[\],])/g;
 
+const LINE_CACHE = new Map();
+/** Cached by the line's text: switching team changes a few lines of thousands. */
 export function highlightLine(line) {
+  const hit = LINE_CACHE.get(line); if (hit !== undefined) return hit;
+  const out = highlightLineRaw(line);
+  if (LINE_CACHE.size > 50000) LINE_CACHE.clear();
+  LINE_CACHE.set(line, out); return out;
+}
+function highlightLineRaw(line) {
   let out = '';
   let last = 0;
   line.replace(TOKEN, (m, str, colon, num, lit, punct, at) => {
@@ -95,11 +124,29 @@ export function highlightExport(text) {
   /* The line number is written out rather than counted in CSS. A counter over
      a few thousand lines is recalculated on every style change, which is most
      of what made a long file scroll badly on a phone. */
-  return lines.map((l, i) => {
-    const depth = l.length - l.trimStart().length;
-    return `<div class="jline" id="jl-${i}" style="--d:${depth}">`
-      + `<span class="jnum">${i + 1}</span>${highlightLine(l.trimStart()) || ' '}</div>`;
-  }).join('');
+  return lines.map(lineHtml).join('');
+}
+
+/** One line of the viewer: its anchor, its number, and its highlighted text. */
+export function lineHtml(l, i) {
+  const depth = l.length - l.trimStart().length;
+  return `<div class="jline" id="jl-${i}" style="--d:${depth}">`
+    + `<span class="jnum">${i + 1}</span>${highlightLine(l.trimStart()) || ' '}</div>`;
+}
+
+/**
+ * How a new document differs from the one shown: the lines shared at the start (p) and
+ * at the end (s). Only the lines between them need building; lines after them only need
+ * renumbering if the middle changed length. When most of the document changed (another
+ * version, a first view), rebuilding it whole is simpler and no slower.
+ */
+export function lineDiff(prev, next) {
+  if (!prev || !prev.length || !next.length) return { rebuild: true, p: 0, s: 0 };
+  const max = Math.min(prev.length, next.length);
+  let p = 0; while (p < max && prev[p] === next[p]) p++;
+  let s = 0; while (s < max - p && prev[prev.length - 1 - s] === next[next.length - 1 - s]) s++;
+  const changed = next.length - p - s;
+  return { rebuild: changed > next.length / 2, p, s };
 }
 
 /**
