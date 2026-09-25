@@ -14,18 +14,15 @@
  * outside the repo would notice.
  */
 export const RELEASE_NOTE_ITEMS = [
-  'New tool: LLM Data Export \u2014 everything an AI assistant needs to be a real '
-  + 'fantasy co-manager. A prompt you copy, and your whole league as one file you '
-  + 'attach to it. Pick your team, copy, attach, and it can talk about your roster, '
-  + 'your matchup, the waiver wire and your league\u2019s own rules.',
-  'The season standings on the home page now carry points per game, points '
-  + 'difference and playoff odds, mark who has clinched or been eliminated, and '
-  + 'sort on any column you tap.',
-  'Looking back at a week already played in Live Matchups shows its score '
-  + 'progression charts and its finished games again.',
-  'Choosing your team looks and works the same on every page, and every list now '
-  + 'shows team logos.',
-  'A shared Trade Analyzer link now opens the trade it was shared with rather '
-  + 'than an empty builder.',
+  'New tool: Fortune Teller. Every way the rest of the regular season can go, '
+  + 'mapped in full. Tap results to watch your playoff odds move, find the simplest '
+  + 'path to a playoff spot, and see the brackets any path produces.',
+  'The home page standings gain a Sim % column once Fortune Teller has run, and a '
+  + 'line marking the playoff places.',
+  'After the regular season, every team shows as clinched or eliminated rather '
+  + 'than a percentage.',
+  'The LLM Data Export now includes Fortune Teller\u2019s playoff odds beside '
+  + 'ESPN\u2019s.',
+  'Help panels now open at their first step.',
   'Various bug fixes.',
 ];
