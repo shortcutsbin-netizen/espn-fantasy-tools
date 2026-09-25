@@ -26,7 +26,8 @@
     "bindings": [
       { "name": "COORDINATOR", "class_name": "DatasetCoordinator" },
       { "name": "THROTTLE", "class_name": "LoginThrottle" },
-      { "name": "SCORE_TIMELINE", "class_name": "ScoreTimelineDO" }
+      { "name": "SCORE_TIMELINE", "class_name": "ScoreTimelineDO" },
+      { "name": "FORTUNE", "class_name": "FortuneTellerDO" }
     ]
   },
   "migrations": [
@@ -41,6 +42,10 @@
     {
       "tag": "v3",
       "new_sqlite_classes": ["ScoreTimelineDO"]
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": ["FortuneTellerDO"]
     }
   ],
   // The platform's only scheduled work. Every other dataset is fetched on
@@ -52,5 +57,12 @@
   // any work, so this is a near-instant no-op outside game windows.
   "triggers": {
     "crons": ["* * * * *"]
-  }
+  },
+  // Workers Logs: invocation logs, errors and uncaught exceptions for this
+  // Worker and its Durable Objects, under Observability in the dashboard.
+  // Declared here rather than switched on in the dashboard because every
+  // deploy resets the Worker's settings to this file. Kept at the end of the
+  // file, away from the two lines a fork edits (name and the KV namespace id),
+  // so the daily sync merges it into forks without a conflict.
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
 }
