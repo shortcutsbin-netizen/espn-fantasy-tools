@@ -89,6 +89,9 @@ function normalise(raw) {
        defaults", which is where every league starts. */
     tradeWeights: (c.tradeWeights && typeof c.tradeWeights === 'object')
       ? c.tradeWeights : {},
+    /* Fortune Teller: off until an administrator switches it on; once on, it builds
+       itself as soon as a build fits and moves on each week. */
+    fortuneTeller: { enabled: Boolean(c.fortuneTeller && c.fortuneTeller.enabled), changedAt: (c.fortuneTeller && c.fortuneTeller.changedAt) || null },
     // The build this site last confirmed its datasets against. Internal
     // bookkeeping for the post-update re-pull banner: deliberately absent from
     // describeConfig, because it describes the deployment rather than the league.
@@ -164,7 +167,7 @@ export async function saveConfig(env, patch) {
   const allowed = [
     'leagueId', 'espnS2', 'swid', 'season', 'leaguePrivate', 'historySeasons',
     'leaguePasswordHash', 'adminPasswordHash', 'sessionSecret', 'setupCompletedAt',
-    'toolVisibility', 'datasetsCheckedVersion', 'tradeWeights',
+    'toolVisibility', 'datasetsCheckedVersion', 'tradeWeights', 'fortuneTeller',
   ];
   for (const field of allowed) {
     if (patch[field] === undefined) continue;
@@ -194,6 +197,7 @@ export function describeConfig(cfg) {
        them. An empty object means "use the defaults", which is also what every
        new league starts with. */
     tradeWeights: cfg.tradeWeights || {},
+    fortuneTeller: { enabled: Boolean(cfg.fortuneTeller && cfg.fortuneTeller.enabled) },
     historyDiscovered: Array.isArray(cfg.historySeasons) && cfg.historySeasons.length > 0,
     leaguePasswordSet: Boolean(cfg.leaguePasswordHash),
     adminPasswordSet: Boolean(cfg.adminPasswordHash),
