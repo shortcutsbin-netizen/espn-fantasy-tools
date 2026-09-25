@@ -29,7 +29,11 @@ export default function Instructions({ open, steps, onClose, label = "How this p
   useEffect(() => {
     if (!open) return undefined;
     openerRef.current = document.activeElement;
-    if (doneRef.current) doneRef.current.focus();
+    // The button sits at the foot of the scrolling pane: focusing it plainly scrolled the dialog to
+    // its end, so a reader opened the help on its last step. Focus it without scrolling; start at the top.
+    if (doneRef.current) doneRef.current.focus({ preventScroll: true });
+    const pane = doneRef.current && doneRef.current.closest('.instr') ? doneRef.current.closest('.instr').querySelector('.vscroll, [data-vscroll]') : null;
+    if (pane) pane.scrollTop = 0;
     return () => {
       if (openerRef.current && openerRef.current.focus) openerRef.current.focus();
     };
