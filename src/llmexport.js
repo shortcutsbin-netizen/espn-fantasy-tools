@@ -598,7 +598,9 @@ export function applyLiveScoring(digest, live, now = Date.now()) {
  * What the route and the dev preview both send. One function, so a preview
  * cannot show a payload the signed-in page would not.
  */
-export function llmExportPayload(digest) {
+export function llmExportPayload(raw, sim = null) {
+  // Fortune Teller's odds are laid over here, the one shaping function the route and the preview share.
+  const digest = applySimOdds(raw, sim);
   if (!digest || !digest.export || !Array.isArray(digest.export.teams) || !digest.export.teams.length) {
     return { ok: true, ready: false };
   }
@@ -610,4 +612,23 @@ export function llmExportPayload(digest) {
     teamsUi: digest.teamsUi || [],
     export: digest.export,
   };
+}
+
+/**
+ * Fortune Teller's simulated playoff odds beside ESPN's, once the simulation has run: the exact
+ * share of every remaining combination of results in which the team makes the playoffs. Laid
+ * over the stored export at request time, like live scoring, so it is never older than the map.
+ */
+export function applySimOdds(digest, sim) {
+  if (!digest || !digest.export || !Array.isArray(digest.export.standings) || !sim) return digest;
+  const fin = sim.final && sim.final.seasonOver ? sim.final.inByTeam : null;
+  if (!sim.byTeam && !fin) return digest;
+  const pct = (v) => (v >= 0.9995 ? 'clinched' : v <= 0.0005 ? 'eliminated' : `${Math.round(v * 1000) / 10}%`);
+  const standings = digest.export.standings.map((r) => {
+    let out = r;
+    if (fin && fin[r.teamId] != null) out = { ...out, playoffOdds: fin[r.teamId] ? 'clinched' : 'eliminated' };   // the regular season is over
+    if (sim.byTeam && sim.byTeam[r.teamId] != null) out = { ...out, simPlayoffOdds: pct(sim.byTeam[r.teamId]) };
+    return out;
+  });
+  return { ...digest, export: { ...digest.export, standings } };
 }
