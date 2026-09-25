@@ -57,14 +57,24 @@ function tzLabel(zone) {
   return String(zone).split("_").join(" ").split("/").join(" / ");
 }
 
-/** Current offset, so a zone name is not the only thing to go on. */
+/**
+ * Current offset, so a zone name is not the only thing to go on. Building a
+ * formatter per zone is expensive (the list has hundreds), so offsets are kept
+ * for an hour: they only move with daylight saving.
+ */
+const OFFSETS = new Map();
 function offsetLabel(zone) {
+  const now = Date.now(), hit = OFFSETS.get(zone);
+  if (hit && now - hit.at < 3600000) return hit.label;
+  let label = "";
   try {
     const s = new Intl.DateTimeFormat("en-US",
-      { timeZone: zone, timeZoneName: "shortOffset" }).format(new Date());
+      { timeZone: zone, timeZoneName: "shortOffset" }).format(new Date(now));
     const m = s.match(/GMT[+-]?\d*(?::\d+)?/);
-    return m ? m[0] : "";
-  } catch { return ""; }
+    label = m ? m[0] : "";
+  } catch { label = ""; }
+  OFFSETS.set(zone, { label, at: now });
+  return label;
 }
 
 export default function SettingsMenu({ open, onClose, theme, onTheme, anchorRef }) {
@@ -169,14 +179,19 @@ export default function SettingsMenu({ open, onClose, theme, onTheme, anchorRef 
                      autoComplete="off" spellCheck="false" aria-label="Search time zones"
                      value={filter} onChange={(e) => setFilter(e.target.value)} />
             </li>
-            {shown.map((z) => (
-              <li key={z} role="option" aria-selected={z === effective}
-                  className={z === effective ? "on" : undefined}
-                  onClick={(e) => { e.stopPropagation(); applyTz(z); setListOpen(false); }}>
-                {label(z)}
-                {offsetLabel(z) ? <small>{offsetLabel(z)}</small> : null}
-              </li>
-            ))}
+            {/* The zones are only rendered while the list is open: hundreds of rows
+                that nobody can see should not be rebuilt on every render. */}
+            {listOpen ? shown.map((z) => {
+              const off = offsetLabel(z);
+              return (
+                <li key={z} role="option" aria-selected={z === effective}
+                    className={z === effective ? "on" : undefined}
+                    onClick={(e) => { e.stopPropagation(); applyTz(z); setListOpen(false); }}>
+                  {label(z)}
+                  {off ? <small>{off}</small> : null}
+                </li>
+              );
+            }) : null}
           </ul>
         </div>
         <button type="button" className="tzauto"
