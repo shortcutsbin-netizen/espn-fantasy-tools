@@ -107,6 +107,21 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
           <button class="ghost" id="histResume" style="margin-top:11px" hidden>Resume an interrupted pull</button>
           <div class="msg" id="msgHistory"></div>
         </div>
+
+        <div class="panel p-ft">
+          <div class="panelhead"><span class="t">Fortune Teller</span></div>
+          <div class="row"><span>Status</span><b id="ftState">&mdash;</b></div>
+          <div class="row"><span>Season</span><b id="ftSeason">&mdash;</b></div>
+          <div class="row"><span>Build</span><b id="ftSize">&mdash;</b></div>
+          <div class="bar"><i id="ftBar"></i></div>
+          <p class="hint" id="ftDetail">Maps every way the rest of the regular season can go. Once switched on it
+            builds by itself as soon as a build fits, runs in the background within the daily allowance, and moves on
+            each week as results come in.</p>
+          <button class="primary" id="ftToggle">Switch on</button>
+          <button class="ghost" id="ftCheck" style="margin-top:11px">Check now</button>
+          <button class="ghost" id="ftRebuild" style="margin-top:11px" hidden>Rebuild the map</button>
+          <div class="msg" id="msgFt"></div>
+        </div>
       </div>
 
       <div class="panel p-weights">
@@ -501,6 +516,44 @@ document.getElementById('weightReset').addEventListener('click', async function 
   if (r.ok) renderWeights(r.tradeWeights || {});
 });
 
+/* Fortune Teller: where the pipeline stands, and the switch. */
+var ftEnabled = false, ftTimer = null;
+function ftRender(p) {
+  var words = { early: 'Waiting for the season', available: 'Ready to build', building: 'Building', updating: 'Updating',
+    ready: 'Live', 'season-over': 'Regular season over', failed: 'Failed', 'no-data': 'League data not pulled yet' };
+  var st = p && p.state, b = p && p.build;
+  document.getElementById('ftState').textContent = st ? (words[st] || st) : 'Not checked yet';
+  document.getElementById('ftSeason').textContent = p && p.mpc ? ('Week ' + p.lastSettled + ' of ' + p.mpc + ' played' + (p.weeksLeft ? ', ' + p.weeksLeft + ' left' : '')) : '\u2014';
+  document.getElementById('ftSize').textContent = st === 'early' && p.opensAfterWeek ? ('Opens after week ' + p.opensAfterWeek)
+    : p && p.estimate ? (Number(p.estimate.paths).toLocaleString('en-US') + ' paths, about ' + (p.estimate.hours < 0.1 ? 'a few minutes' : p.estimate.hours < 24 ? p.estimate.hours.toFixed(1) + ' hours' : (p.estimate.hours / 24).toFixed(1) + ' days')) : '\u2014';
+  var share = b && b.n ? Math.min(1, ((b.team || 0) + (b.parts > 1 && b.next !== 'merge' ? (b.part || 0) / b.parts : 0)) / b.n) : (st === 'ready' ? 1 : 0);
+  document.getElementById('ftBar').style.width = Math.round(share * 100) + '%';
+  document.getElementById('ftDetail').textContent = st === 'failed' ? ('The last attempt stopped: ' + (p.error || 'no reason recorded') + '. Rebuild to try again.')
+    : st === 'building' || st === 'updating' ? ('Team ' + Math.min((b && b.team || 0) + 1, b && b.n || 0) + ' of ' + (b && b.n || '?') + '. It carries on without this page open.')
+    : st === 'ready' ? ('The league is seeing the map through week ' + p.thru + '. It moves on by itself as each week settles.')
+    : st === 'early' ? ('A build fits once week ' + p.opensAfterWeek + ' has been played. Switch it on now and it will start by itself then.')
+    : st === 'available' ? 'A build fits now. Switch it on and it starts straight away.'
+    : 'Maps every way the rest of the regular season can go.';
+  ftEnabled = !!(p && p.enabled);
+  document.getElementById('ftToggle').textContent = ftEnabled ? 'Switch off' : 'Switch on';
+  document.getElementById('ftRebuild').hidden = !ftEnabled || st === 'building' || st === 'updating';
+  clearTimeout(ftTimer); if (st === 'building' || st === 'updating') ftTimer = setTimeout(ftLoad, 20000);
+}
+async function ftLoad() {
+  try { var d = await (await fetch('/api/fortune-teller', { credentials: 'same-origin' })).json(); ftRender(d.pipeline || null); } catch (e) { /* shown as not checked */ }
+}
+async function ftAct(action, id) {
+  var btn = document.getElementById(id); btn.disabled = true;
+  var r = await call('/api/admin/fortune-teller', { action: action });
+  btn.disabled = false;
+  note('msgFt', r.ok ? ({ enable: 'Switched on.', disable: 'Switched off.', check: 'Checked.', rebuild: 'Rebuilding.' }[action]) : (r.error || 'Could not change it.'), r.ok ? 'ok' : 'err');
+  if (r.ok && r.pipeline) ftRender(Object.assign({}, r.pipeline, { enabled: r.enabled }));
+}
+document.getElementById('ftToggle').addEventListener('click', function () { ftAct(ftEnabled ? 'disable' : 'enable', 'ftToggle'); });
+document.getElementById('ftCheck').addEventListener('click', function () { ftAct('check', 'ftCheck'); });
+document.getElementById('ftRebuild').addEventListener('click', function () { ftAct('rebuild', 'ftRebuild'); });
+ftLoad();
+
 async function call(url, body, pwOverride) {
   try {
     var res = await fetch(url, {
@@ -528,6 +581,8 @@ async function call(url, body, pwOverride) {
        'Visible to the league, admin-only, or hidden. Admin-only tools still appear on the home page with a lock, so the league can see they exist.'],
       ['04', 'Trade Analyzer weighting',
        'Sets what each statistic is worth when the tool judges a deal for your league. Anyone can still move the adjustable ones while they look at a trade; that never changes what you save here.'],
+      ['05', 'Fortune Teller',
+       'Switch it on and it builds the map by itself as soon as the league is close enough to the end of the regular season, then moves on each week. Check now asks it to look straight away; Rebuild starts the map again from scratch.'],
       ['05', 'Re-run a pull any time',
        'Refreshing league data, and re-pulling past seasons, can both be run again whenever you like. Neither loses anything by being repeated.'],
       ['06', 'Time zone is per person',
