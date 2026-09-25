@@ -56,7 +56,7 @@ const SECTION_TEXT = {
   about: () => 'when the export was made, the current week, and conventions used throughout. Read it first.',
   myTeam: () => 'which team is mine, where it stands, and who I play this week.',
   league: () => 'the rules: starting lineup slots, roster size and position maximums, the complete scoring system, lineup locking, the postseason format, and waiver and trade rules.',
-  standings: () => 'rank, record, points for and against, streak and ESPN\'s playoff odds for every team.',
+  standings: () => 'rank, record, points for and against, streak and ESPN\'s playoff odds for every team, plus `simPlayoffOdds` once Fortune Teller has run: the exact share of every remaining combination of results in which the team makes the playoffs.',
   thisWeek: () => 'this week\'s fantasy matchups with current points, projected points and win probability.',
   teams: (c) => (c ? 'every team\'s waiver priority and full roster in lineup order.'
     : 'every team\'s waiver priority, moves made this season, and full roster in lineup order.'),
