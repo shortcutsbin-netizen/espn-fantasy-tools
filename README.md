@@ -47,6 +47,10 @@ understand the workflows. Then, navigate to the "Sync with upstream" action
 in the sidebar and click to enable it. This is what lets your fork stay in 
 sync with the original later on. Nothing runs until you allow it.
 
+The sync cannot update its own workflow file. If an update ever changes it, the
+sync stops with an error until you open your fork's page on GitHub once and
+click **Sync fork**, then **Update branch**.
+
 ### 3. Create your Cloudflare account
 
 Go to Cloudflare and sign up. **Choose "Sign in with GitHub" and use the same
@@ -104,7 +108,7 @@ icon at the top right to edit it. Two values change:
 | Find | Replace with | Roughly |
 |---|---|---|
 | the `"name"` value | whatever you want your site called | line 2 |
-| `PLACE_YOUR_KV_NAMESPACE_HERE` | the KV ID you copied in step 6 | line 16 |
+| `REPLACE_WITH_YOUR_KV_NAMESPACE_ID` | the KV ID you copied in step 6 | line 16 |
 
 The name you choose becomes your web address:
 `https://<name>.<your-cloudflare-subdomain>.workers.dev`
@@ -198,6 +202,11 @@ Everything is adjustable from **Site Configuration**, reachable from the
 dashboard and gated by your Admin Password. Change either password, replace your
 ESPN cookies if league data stops loading, switch tools on and off, and re-run
 or resume the history pull.
+
+Fortune Teller starts switched off. Switch it on in Site Configuration and it
+builds its map of every way the regular season can go by itself, as soon as the
+league is close enough to the end for that to be done in full, then moves on
+each week as results come in.
 
 Site Configuration never keeps you signed in as admin. The password is asked for
 when the page opens and checked again on every single change, and closing the
