@@ -1,3 +1,5 @@
+import ScrollBox from "../shared/ScrollBox.jsx";
+import ToolControls from "../shared/ToolControls.jsx";
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { PALETTES, BASE_CSS, BACKDROP } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
@@ -265,91 +267,6 @@ function TeamName({ row }) {
  * a programmatic scrollLeft write fires the partner's scroll event a frame
  * later. Driving a real element from pointer events removes the loop entirely.
  */
-function ScrollBox({ children }) {
-  const realRef = useRef(null);
-  const barRef = useRef(null);
-  const thumbRef = useRef(null);
-  const drag = useRef(null);
-
-  const layout = useCallback(() => {
-    const real = realRef.current, bar = barRef.current, thumb = thumbRef.current;
-    if (!real || !bar || !thumb) return;
-    const cw = real.clientWidth, sw = real.scrollWidth;
-    if (sw <= cw + 1) { bar.hidden = true; return; }
-    bar.hidden = false;
-    const barW = bar.clientWidth || cw;
-    const tw = Math.max(32, Math.round(barW * (cw / sw)));
-    thumb.style.width = `${tw}px`;
-    const max = sw - cw;
-    thumb.style.transform = `translateX(${max > 0 ? (real.scrollLeft / max) * (barW - tw) : 0}px)`;
-  }, []);
-
-  useEffect(() => {
-    layout();
-    const real = realRef.current;
-    if (!real) return undefined;
-    // Deferred a frame for the same reason as the identity strips: layout()
-    // writes to the very element being observed, so calling it synchronously
-    // from the observer re-entered it.
-    let frame = 0;
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; layout(); }); };
-    let ro = null;
-    if (typeof ResizeObserver === "function") {
-      try { ro = new ResizeObserver(schedule); ro.observe(real); } catch { ro = null; }
-    }
-    window.addEventListener("resize", schedule);
-    return () => {
-      if (frame) cancelAnimationFrame(frame);
-      if (ro) ro.disconnect();
-      window.removeEventListener("resize", schedule);
-    };
-  }, [layout, children]);
-
-  const onDown = (e) => {
-    const real = realRef.current, thumb = thumbRef.current, bar = barRef.current;
-    if (!real || !thumb) return;
-    drag.current = { x: e.clientX, left: real.scrollLeft, tw: thumb.offsetWidth, barW: bar.clientWidth };
-    bar.classList.add("dragging");
-    try { thumb.setPointerCapture(e.pointerId); } catch { /* not fatal */ }
-    e.preventDefault();
-    e.stopPropagation();
-  };
-  const onMove = (e) => {
-    const d = drag.current, real = realRef.current;
-    if (!d || !real) return;
-    const travel = Math.max(1, d.barW - d.tw);
-    real.scrollLeft = d.left + ((e.clientX - d.x) / travel) * (real.scrollWidth - real.clientWidth);
-    layout();
-    e.preventDefault();
-  };
-  const onUp = (e) => {
-    if (!drag.current) return;
-    drag.current = null;
-    if (barRef.current) barRef.current.classList.remove("dragging");
-    try { thumbRef.current.releasePointerCapture(e.pointerId); } catch { /* not fatal */ }
-  };
-  const onTrack = (e) => {
-    if (e.target === thumbRef.current) return;
-    const real = realRef.current;
-    if (!real) return;
-    const r = barRef.current.getBoundingClientRect();
-    const frac = (e.clientX - r.left) / Math.max(1, r.width);
-    real.scrollLeft = frac * (real.scrollWidth - real.clientWidth);
-    layout();
-  };
-
-  return (
-    <div className="scrollwrap">
-      <div className="sbar" ref={barRef} hidden onPointerDown={onTrack}>
-        <div className="sbar-thumb" ref={thumbRef}
-          onPointerDown={onDown} onPointerMove={onMove}
-          onPointerUp={onUp} onPointerCancel={onUp} />
-      </div>
-      <div className="scrollreal" ref={realRef} onScroll={layout}>{children}</div>
-    </div>
-  );
-}
-
 /* ========================================================= sortable table */
 
 /**
@@ -1318,9 +1235,6 @@ export default function HallOfFame() {
   const [theme, setTheme] = useState(() =>
     (typeof document !== "undefined" && document.documentElement.dataset.theme) ||
     (readCookie(THEME_COOKIE) === "light" ? "light" : "dark"));
-  const [showHelp, setShowHelp] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const gearRef = useRef(null);
   const [openId, setOpenId] = useState(null);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
@@ -1779,20 +1693,7 @@ export default function HallOfFame() {
             <div className="toolleague">{leagueName}</div>
           </div>
           <div className="toolctl">
-            <button className="ctlbtn" onClick={() => setShowHelp(true)} title="How to use this tool" type="button">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="9.4" />
-                <path d="M9.2 9.3a2.8 2.8 0 1 1 3.9 2.9c-.9.5-1.4 1-1.4 2.1" />
-                <circle cx="12" cy="17.2" r=".55" fill="currentColor" stroke="none" />
-              </svg>
-            </button>
-            <button className="ctlbtn" ref={gearRef} title="Site settings"
-              aria-haspopup="dialog" type="button"
-              onClick={(e) => { e.stopPropagation(); setShowSettings((v) => !v); }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3.1" /><path d="M19.1 14.6a1.5 1.5 0 0 0 .3 1.7l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.5 1.5 0 0 0-1.7-.3 1.5 1.5 0 0 0-.9 1.4v.2a2 2 0 1 1-4 0v-.1a1.5 1.5 0 0 0-1-1.4 1.5 1.5 0 0 0-1.7.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.5 1.5 0 0 0 .3-1.7 1.5 1.5 0 0 0-1.4-.9H3a2 2 0 1 1 0-4h.1a1.5 1.5 0 0 0 1.4-1 1.5 1.5 0 0 0-.3-1.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.5 1.5 0 0 0 1.7.3H9a1.5 1.5 0 0 0 .9-1.4V3a2 2 0 1 1 4 0v.1a1.5 1.5 0 0 0 .9 1.4 1.5 1.5 0 0 0 1.7-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.5 1.5 0 0 0-.3 1.7V9a1.5 1.5 0 0 0 1.4.9h.2a2 2 0 1 1 0 4h-.1a1.5 1.5 0 0 0-1.4.9z" /></svg>
-            </button>
-            <SettingsMenu open={showSettings} onClose={() => setShowSettings(false)}
-              theme={theme} onTheme={setTheme} anchorRef={gearRef} />
+            <ToolControls steps={HELP_STEPS} label="How to use the Hall of Fame" theme={theme} onTheme={setTheme} />
           </div>
         </div>
 
@@ -1844,10 +1745,6 @@ export default function HallOfFame() {
         </div>
       </div>
 
-      {showHelp && (
-        <Instructions open steps={HELP_STEPS} onClose={() => setShowHelp(false)}
-          label="How to use the Hall of Fame" />
-      )}
     </div>
   );
 }
