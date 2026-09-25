@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import ToolControls from "../shared/ToolControls.jsx";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from "react";
 import { PALETTES, BASE_CSS, BACKDROP, TEAM_COOKIE } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamSelect from "../shared/TeamSelect.jsx";
@@ -8,7 +9,7 @@ import { applyMyTeam } from "./myteam.js";
 import { compactExport } from "./compact.js";
 import { buildPrompt } from "./prompt.js";
 import {
-  formatExport, highlightExport, sectionMap, formatBytes, downloadName,
+  formatExport, lineHtml, lineDiff, sectionMap, formatBytes, downloadName,
 } from "./format.js";
 
 /* ==========================================================================
@@ -477,8 +478,6 @@ export default function LlmExport() {
   const fetchedAt = useRef(Date.now());
   const [loading, setLoading] = useState(!preview);
   const [failed, setFailed] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [showInstr, setShowInstr] = useState(false);
   const [theme, setTheme] = useState(() =>
     (typeof document !== "undefined"
       ? document.documentElement.getAttribute("data-theme") : "dark") || "dark");
@@ -490,7 +489,6 @@ export default function LlmExport() {
   const [version, setVersion] = useState("full");
   const [promptOpen, setPromptOpen] = useState(false);
   const [active, setActive] = useState(null);
-  const gearRef = useRef(null);
   const viewRef = useRef(null);
   const viewBarRef = useRef(null);
   const promptRef = useRef(null);
@@ -528,7 +526,25 @@ export default function LlmExport() {
   const compact = useMemo(() => (compactDoc ? formatExport(compactDoc) : ""), [compactDoc]);
   const doc = version === "compact" ? compactDoc : mine;
   const text = version === "compact" ? compact : full;
-  const html = useMemo(() => (text ? highlightExport(text) : ""), [text]);
+  const lines = useMemo(() => (text ? text.replace(/\n$/, "").split("\n") : []), [text]);
+  /* The viewer is patched, never replaced: only lines that changed are built, and lines
+     after a change that moved them are renumbered. Replacing it whole re-parsed thousands
+     of lines to change a handful when the reader picked another team. What is copied or
+     downloaded comes from the text, never from this view, so it cannot be affected. */
+  const shown = useRef({ pane: null, lines: null });
+  useLayoutEffect(() => {
+    const pane = viewRef.current; if (!pane) return;
+    const prev = shown.current.pane === pane ? shown.current.lines : null, d = lineDiff(prev, lines);
+    if (d.rebuild) pane.innerHTML = lines.map(lineHtml).join("");
+    else {
+      const kids = pane.children, oldMid = prev.length - d.p - d.s, newMid = lines.length - d.p - d.s;
+      for (let i = 0; i < oldMid; i++) pane.removeChild(kids[d.p]);
+      const add = lines.slice(d.p, d.p + newMid).map((l, k) => lineHtml(l, d.p + k)).join("");
+      if (add) { if (d.p < kids.length) kids[d.p].insertAdjacentHTML("beforebegin", add); else pane.insertAdjacentHTML("beforeend", add); }
+      if (newMid !== oldMid) for (let i = d.p + newMid; i < lines.length; i++) { const el = kids[i]; el.id = "jl-" + i; el.firstChild.textContent = String(i + 1); }
+    }
+    shown.current = { pane, lines };
+  }, [lines]);
   const sections = useMemo(() => (doc ? sectionMap(doc, text) : []), [doc, text]);
   const bytes = useMemo(() => new TextEncoder().encode(text).length, [text]);
   const fullBytes = useMemo(() => new TextEncoder().encode(full).length, [full]);
@@ -546,26 +562,34 @@ export default function LlmExport() {
     writeTeamCookie(id);
   };
 
-  /* Which section the viewer is showing, from where its first line sits. */
+  /* Which section the viewer is showing, from where its first line sits. Section positions
+     are measured once after each change, after the frame has painted (so layout is already
+     done), and a scroll only compares against them: reading positions on the spot forced a
+     layout of every line, on every change and every scroll event. */
+  const sectionTops = useRef([]);
   const onViewScroll = useCallback(() => {
     const pane = viewRef.current;
     if (!pane || !sections.length) return;
     const top = pane.scrollTop + 10;
     let current = null;
-    for (const s of sections) {
-      if (s.line < 0) continue;
-      const el = pane.querySelector("#jl-" + s.line);
-      if (el && el.offsetTop <= top) current = s.key;
-    }
+    sections.forEach((s, i) => { const t = sectionTops.current[i]; if (t != null && t <= top) current = s.key; });
     setActive(current);
   }, [sections]);
-  useEffect(() => { onViewScroll(); }, [html, onViewScroll]);
+  useEffect(() => {
+    const pane = viewRef.current; if (!pane) return undefined;
+    let timer = 0;
+    const raf = requestAnimationFrame(() => { timer = setTimeout(() => {
+      sectionTops.current = sections.map((s) => { if (s.line < 0) return null; const el = pane.querySelector("#jl-" + s.line); return el ? el.offsetTop : null; });
+      onViewScroll();
+    }, 0); });
+    return () => { cancelAnimationFrame(raf); clearTimeout(timer); };
+  }, [lines, sections, onViewScroll]);
   // Re-attached when the text changes: the pane's content is replaced whole, so
   // the bar has a new length to measure.
   useEffect(() => {
-    if (!viewRef.current || !viewBarRef.current || !html) return undefined;
+    if (!viewRef.current || !viewBarRef.current || !lines.length) return undefined;
     return attachVScroll(viewRef.current, viewBarRef.current);
-  }, [html]);
+  }, [lines]);
 
   const jump = (s) => {
     const pane = viewRef.current;
@@ -656,33 +680,12 @@ export default function LlmExport() {
         <div className="toolleague">{(data && data.leagueName) || "League"}</div>
       </div>
       <div className="toolctl">
-        <button className="ctlbtn" type="button" title="How to use this tool"
-          onClick={() => setShowInstr(true)}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-            strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="9.4" />
-            <path d="M9.2 9.3a2.8 2.8 0 1 1 3.9 2.9c-.9.5-1.4 1-1.4 2.1" />
-            <circle cx="12" cy="17.2" r=".55" fill="currentColor" stroke="none" />
-          </svg>
-        </button>
-        <button className="ctlbtn" type="button" title="Site settings" ref={gearRef}
-          aria-haspopup="dialog" onClick={() => setShowSettings((s) => !s)}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"
-            strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3.1" />
-            <path d="M19.1 14.6a1.5 1.5 0 0 0 .3 1.7l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.5 1.5 0 0 0-1.7-.3 1.5 1.5 0 0 0-.9 1.4v.2a2 2 0 1 1-4 0v-.1a1.5 1.5 0 0 0-1-1.4 1.5 1.5 0 0 0-1.7.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.5 1.5 0 0 0 .3-1.7 1.5 1.5 0 0 0-1.4-.9H3a2 2 0 1 1 0-4h.1a1.5 1.5 0 0 0 1.4-1 1.5 1.5 0 0 0-.3-1.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.5 1.5 0 0 0 1.7.3H9a1.5 1.5 0 0 0 .9-1.4V3a2 2 0 1 1 4 0v.1a1.5 1.5 0 0 0 .9 1.4 1.5 1.5 0 0 0 1.7-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.5 1.5 0 0 0-.3 1.7V9a1.5 1.5 0 0 0 1.4.9h.2a2 2 0 1 1 0 4h-.1a1.5 1.5 0 0 0-1.4.9z" />
-          </svg>
-        </button>
-        <SettingsMenu open={showSettings} onClose={() => setShowSettings(false)}
-          theme={theme} onTheme={setTheme} anchorRef={gearRef} />
+        <ToolControls steps={INSTRUCTIONS} label="How to use the LLM Data Export" theme={theme} onTheme={setTheme} />
       </div>
     </div>
   );
 
-  const Help = (
-    <Instructions open={showInstr} steps={INSTRUCTIONS}
-      onClose={() => setShowInstr(false)} label="How to use the LLM Data Export" />
-  );
+  const Help = null;   // the help dialog now comes with ToolControls
 
   const Foot = (
     <React.Fragment>
@@ -862,8 +865,7 @@ export default function LlmExport() {
 
           <div className="viewer vwrap">
             <div ref={viewRef} className="jsonview vscroll scrollpane" tabIndex={0}
-              aria-label="League data as JSON" onScroll={onViewScroll}
-              dangerouslySetInnerHTML={{ __html: html }} />
+              aria-label="League data as JSON" onScroll={onViewScroll} />
             <div className="vbar" hidden ref={viewBarRef}><div className="vbar-thumb" /></div>
           </div>
         </div>
