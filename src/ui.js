@@ -1186,7 +1186,10 @@ ${VSCROLL_JS}
       // Focus follows the dialog, or a keyboard reader is left behind the page
       // it just opened.
       var done = document.getElementById('instrDone');
-      if (done) done.focus();
+      // Without preventScroll the pane scrolled to the button at its foot and opened on the last step.
+      if (done) done.focus({ preventScroll: true });
+      var pane = done && done.closest('.instr') ? done.closest('.instr').querySelector('.vscroll, [data-vscroll]') : null;
+      if (pane) pane.scrollTop = 0;
     } else if (help) {
       help.focus();
     }
