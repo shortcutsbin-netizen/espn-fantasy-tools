@@ -15,7 +15,7 @@ import { DERIVATIONS } from './derive.js';
 import { ENGINE_VERSION, SCORE_DIFF_SD, TIE_CHANCE, leagueState } from './ftleague.js';
 import { MIN_GAP_MS, BYTE_BUDGET, MAX_EVENTS, MIN_DELTA } from './scoretimeline.js';
 import { setupCodeRequired, setupCodeGeneratedAt } from './setup.js';
-import { SESSION_TTL_SECONDS } from './auth.js';
+import { sessionHoursOf, sessionWords } from './auth.js';
 import * as TA from '../app/trade-analyzer/constants.js';
 import { compactExport, COMPACT_FREE_AGENT_DEPTH } from '../app/llm-export/compact.js';
 import { rosterShape } from '../app/draft-helper/rosterShape.js';
@@ -33,6 +33,12 @@ const P = (id, title, def) => ({ id, title, ...def });
 const DAY = 86400000;
 /** A trade's status in the words the home page's league activity uses (a proposal pulled by its proposer is withdrawn). */
 export const TRADE_STATUS = { completed: 'Completed', on_the_table: 'On the table', pending_approval: 'Pending approval', rejected: 'Rejected', cancelled: 'Withdrawn', expired: 'Expired' };
+/** The span a "still signed in" count looks back over: the sign-in length, held to the seven days the log keeps. */
+const sessionSpan = async (src) => {
+  const h = sessionHoursOf(await src.cfg()); const cap = 7 * 24;
+  const hours = h === 'infinite' || h > cap ? cap : h;
+  return { ms: hours * 3600000, words: sessionWords(hours) };
+};
 const day0Of = (src) => Number(src.params.day0) || utcMidnight(src.now);
 
 // ---------------------------------------------------------------- the standard five
@@ -63,7 +69,7 @@ function standard(page, ownSettings) {
       sub: 'What an administrator controls here, and what members chose',
       sum: async (src, ctx) => {
         const v = pageVisibility(ctx.cfg, page);
-        const extra = { 'fortune-teller': ctx.cfg.fortuneTeller && ctx.cfg.fortuneTeller.enabled ? 'switched on' : 'switched off', signin: `${SESSION_TTL_SECONDS / 3600}-hour sessions`,
+        const extra = { 'fortune-teller': ctx.cfg.fortuneTeller && ctx.cfg.fortuneTeller.enabled ? 'switched on' : 'switched off', signin: `sessions last ${sessionWords(sessionHoursOf(ctx.cfg))}`,
           'trade-analyzer': `${TRADE_ROWS.filter((r) => ctx.cfg.tradeWeights && ctx.cfg.tradeWeights[r.id] != null && ctx.cfg.tradeWeights[r.id] !== r.w).length} weighting rows moved` }[page.key];
         return [null, extra ? `${v}; ${extra}` : v];
       },
@@ -271,7 +277,7 @@ const OWN = {
   },
 
   signin: {
-    settings: async () => [['Session length', C.txt(`${SESSION_TTL_SECONDS / 3600} hours`)], ['Throttle', C.txt('10 failures in 10 minutes per IP address')],
+    settings: async (src) => [['Session length', C.txt(sessionWords(sessionHoursOf(await src.cfg())))], ['Throttle', C.txt('10 failures in 10 minutes per IP address')],
       ['Password hashing', C.txt('PBKDF2, 100,000 iterations')], ['Shortest password', C.txt('8 characters')], ['Tool unlock', C.txt('30 minutes, for that tool only')]],
     panels: [
       P('s-hours', 'Sign-ins by hour', {
@@ -281,10 +287,10 @@ const OWN = {
       }),
       P('s-sessions', 'Sessions', {
         live: true,
-        sum: async (src) => [null, `${countEvents(src, src.now - SESSION_TTL_SECONDS * 1000, "AND text = 'Signed in'").n} signed in within ${SESSION_TTL_SECONDS / 3600} hours`],
+        sum: async (src) => { const w = await sessionSpan(src); return [null, `${countEvents(src, src.now - w.ms, "AND text = 'Signed in'").n} signed in within ${w.words}`]; },
         body: async (src) => {
-          const d0 = day0Of(src);
-          return [B.kv([['Possibly still signed in', C.n(countEvents(src, src.now - SESSION_TTL_SECONDS * 1000, "AND text = 'Signed in'").n, `signed in within the last ${SESSION_TTL_SECONDS / 3600} hours`)],
+          const d0 = day0Of(src); const w = await sessionSpan(src);
+          return [B.kv([['Possibly still signed in', C.n(countEvents(src, src.now - w.ms, "AND text = 'Signed in'").n, `signed in within the last ${w.words}`)],
             ['Lapsed today', C.n(countEvents(src, d0, "AND text = 'Session lapsed'").n)], ['Signed out today', C.n(countEvents(src, d0, "AND text = 'Signed out'").n)],
             ['Tool unlocks today', C.n(countEvents(src, d0, "AND kind = 'admin' AND text LIKE 'Unlocked %'").n, '30 minutes each')]])];
         },
