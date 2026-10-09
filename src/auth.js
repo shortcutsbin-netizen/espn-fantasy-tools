@@ -149,6 +149,27 @@ export const SESSION_TTL_SECONDS = 60 * 60 * 8; // 8 hours — caps how long an
 // abandoned tab can keep polling, which is the only usage pattern that scales
 // cost with time rather than with people.
 
+/* How long a League Password sign-in lasts. The administrator picks a stop on this scale in Site Configuration;
+   null (nothing chosen) means the default. 'infinite' is a ten-year session, which no browser outlasts. */
+export const SESSION_STOPS = [1, 2, 4, 8, 12, 24, 72, 168, 720, 2160, 'infinite'];
+export const SESSION_DEFAULT_HOURS = 8;
+export const SESSION_INFINITE_SECONDS = 60 * 60 * 24 * 3650;
+export function sessionHoursOf(cfg) {
+  const v = cfg && cfg.sessionHours;
+  return SESSION_STOPS.includes(v) ? v : SESSION_DEFAULT_HOURS;
+}
+export function sessionSecondsOf(cfg) {
+  const h = sessionHoursOf(cfg);
+  return h === 'infinite' ? SESSION_INFINITE_SECONDS : h * 3600;
+}
+/** "8 hours", "3 days", "forever": the length in the words members and the administrator read. */
+export function sessionWords(h) {
+  if (h === 'infinite') return 'until signed out or the League Password changes';
+  if (h < 24) return `${h} hour${h === 1 ? '' : 's'}`;
+  const d = h / 24;
+  return `${d} day${d === 1 ? '' : 's'}`;
+}
+
 export function readCookie(request, name) {
   const header = request.headers.get('cookie');
   if (!header) return null;
@@ -182,7 +203,10 @@ export async function hasLeagueSession(request, cfg) {
   const token = readCookie(request, SESSION_COOKIE);
   if (!token) return false;
   const payload = await readSession(cfg.sessionSecret, token);
-  return Boolean(payload && payload.s === 'league');
+  if (!payload || payload.s !== 'league') return false;
+  // A changed League Password ends every sign-in made before it, however long that sign-in was meant to last.
+  if (Number.isFinite(cfg.sessionsFrom) && !(payload.iat >= cfg.sessionsFrom)) return false;
+  return true;
 }
 
 /**
