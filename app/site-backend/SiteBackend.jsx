@@ -136,6 +136,7 @@ export default function SiteBackend() {
       if (t === "activity" && j.feed) {
         const fd = j.feed;
         if (mode === "poll" && f.loaded) {
+          setFeed((old) => ((old.rest || null) === (fd.rest || null) ? old : { ...old, rest: fd.rest || null }));
           if (fd.items.length) {
             const ids = new Set(f.items.map((x) => x.id));
             const add = fd.items.filter((x) => !ids.has(x.id));
@@ -151,7 +152,7 @@ export default function SiteBackend() {
           });
         } else {
           setFresh(new Set());
-          setFeed({ items: fd.items, newestId: fd.newestId, newestHour: fd.newestHour, oldestId: fd.oldestId, oldestAt: fd.oldestAt, more: fd.more, loaded: true });
+          setFeed({ items: fd.items, newestId: fd.newestId, newestHour: fd.newestHour, oldestId: fd.oldestId, oldestAt: fd.oldestAt, more: fd.more, loaded: true, rest: fd.rest || null });
         }
       }
     } catch (err) {
@@ -316,6 +317,7 @@ export default function SiteBackend() {
         </div>
         {status === "paused" ? <button className="idlebar" type="button" onClick={resume}><b>Paused</b> after 4 hours without a tap. Tap to resume live updates.</button> : null}
         {problem ? <Problem kind={problem} /> : null}
+        {d && d.rest ? <div className="restbar" role="status"><b>Saving reads</b> {d.rest.text}</div> : null}
         <main>
           {!d ? <div className="empty" style={{ marginTop: 14 }}>{problem ? "Nothing to show until the site can be reached." : "Reading the site…"}</div>
             : tab === "activity" ? <Activity d={d} act={act} setAct={setAct} feed={feed} fresh={fresh} older={() => load("activity", "older")} />
@@ -512,6 +514,7 @@ function Activity({ d, act, setAct, feed, fresh, older }) {
           <div className="filters"><input type="search" placeholder="Search the log" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search the log" /></div>
           <div className="chips">{KINDS.map(([k, l]) => chip("kind", k, l))}{chip("sev", "", "any severity")}{chip("sev", "problems", "warnings and failures")}</div>
           {!feed.loaded ? <div className="loading">Reading the log…</div> : <>
+            {feed.rest ? <div className="restnote">{feed.rest}</div> : null}
             <p className="note" style={{ margin: "0 0 8px" }}>{num(feed.items.length)} {feed.items.length === 1 ? "entry" : "entries"} shown{feed.more ? ", more below" : ""}.</p>
             <Feed items={feed.items} fresh={fresh} />
             {feed.more ? <button className="more" type="button" onClick={older}>Show older entries</button> : null}
