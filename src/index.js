@@ -18,7 +18,7 @@ import { coordinatorRefresh } from './dedupe.js';
 import { getPart, headPart, readStatus, isFresh, ageSeconds } from './store.js';
 import {
   hasLeagueSession, verifyPassword, hashPassword, createSession, sessionCookie,
-  clearSessionCookie, checkAdminPassword, readCookie, readSession, SESSION_TTL_SECONDS,
+  clearSessionCookie, checkAdminPassword, readCookie, readSession, SESSION_TTL_SECONDS, SESSION_STOPS, sessionHoursOf, sessionSecondsOf, sessionWords,
 } from './auth.js';
 import { setupCodeRequired, verifySetupCode, completePasswordSetup } from './setup.js';
 import { throttleCheck, throttleFail, throttleSucceed } from './throttle.js';
@@ -62,7 +62,7 @@ import { started as startedKey, normaliseSiteApi, replaced as replacedKey, dueCh
 import { RELEASE_NOTE_ITEMS } from './release.js';
 import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r199';
+const BUILD_MARKER = 'r203';
 
 
 
@@ -915,8 +915,9 @@ async function handleLogin(request, env, cfg) {
   }
   await throttleSucceed(env, request);
   note(request, 'sign-in', 'Signed in', { page: 'signin' });
-  const token = await createSession(cfg.sessionSecret, 'league', SESSION_TTL_SECONDS);
-  return json({ ok: true, next: '/' }, 200, { 'set-cookie': sessionCookie(token) });
+  const ttl = sessionSecondsOf(cfg);
+  const token = await createSession(cfg.sessionSecret, 'league', ttl);
+  return json({ ok: true, next: '/' }, 200, { 'set-cookie': sessionCookie(token, ttl) });
 }
 
 // ---------------------------------------------------------------- wizard
@@ -1141,6 +1142,8 @@ async function handleAdmin(request, env, cfg, path) {
     const saNow = normaliseSiteApi(cfg.siteApi);
     if (lp && saNow.gen) patch.siteApi = replacedKey(saNow, Date.now(), { grace: false, how: 'password' });
     patch.stamps = {};
+    // Everyone signed in under the old League Password is signed out, however long their sign-in was set to last.
+    if (lp) patch.sessionsFrom = Math.floor(Date.now() / 1000);
     if (lp) patch.stamps.leaguePassword = stamp();
     if (ap) patch.stamps.adminPassword = stamp();
     const savedPw = await saveConfig(env, patch);
@@ -1150,7 +1153,9 @@ async function handleAdmin(request, env, cfg, path) {
       forgetApiSettings();
       note(request, 'admin', 'Site API key replaced with the League Password; the old key stopped', { page: 'site-api' });
     }
-    return json({ ok: true, keyReplaced: Boolean(patch.siteApi), siteApi: await siteApiFacts(env, savedPw, { lazy: false }) });
+    let keep = null;
+    if (lp) { const ttl = sessionSecondsOf(savedPw); keep = { 'set-cookie': sessionCookie(await createSession(savedPw.sessionSecret, 'league', ttl), ttl) }; }
+    return json({ ok: true, keyReplaced: Boolean(patch.siteApi), siteApi: await siteApiFacts(env, savedPw, { lazy: false }) }, 200, keep || {});
   }
 
   if (path === '/api/admin/site-api-members') {
@@ -1251,6 +1256,15 @@ async function handleAdmin(request, env, cfg, path) {
     const t = TOOLS.find((x) => x.key === body.tool);
     note(request, 'admin', `Tool visibility changed: ${t ? t.name : body.tool} → ${body.visibility === 'admin' ? 'admin-only' : body.visibility}`, { page: body.tool });
     return json({ ok: true, tools: describeTools(saved) });
+  }
+
+  if (path === '/api/admin/session-length') {
+    // How long a League Password sign-in lasts: one stop of SESSION_STOPS. Takes effect for the next sign-in; the
+    // sign-ins already made keep the length they were given.
+    if (!SESSION_STOPS.includes(body.hours)) return json({ ok: false, error: 'Choose one of the lengths on the slider.' }, 400);
+    const saved = await saveConfig(env, { sessionHours: body.hours === 8 ? null : body.hours, stamps: { sessionHours: stamp() } });
+    note(request, 'admin', `Sign-in length changed: ${sessionWords(body.hours)}`, { page: 'config' });
+    return json({ ok: true, hours: sessionHoursOf(saved) });
   }
 
   if (path === '/api/admin/tool-order') {
