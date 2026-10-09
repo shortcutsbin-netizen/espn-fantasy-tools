@@ -195,6 +195,8 @@ export function note(request, kind, text, { sev = 'info', page = null } = {}) {
   try {
     const trace = traceOf(request);
     const ev = { at: Date.now(), kind, sev, text: String(text).slice(0, 160), page, team: readTeam(request) };
+    // A sign-in entry is kept only when a team was chosen on that browser: a request with none is anyone at all.
+    if (kind === 'sign-in' && ev.team == null) return;
     if (trace) trace.events.push(ev);
     else if (ISO.events.length < MAX_BUFFERED_EVENTS) ISO.events.push(ev);
   } catch { /* recording must never matter */ }
@@ -280,7 +282,9 @@ export function finishRequest(env, ctx, request, response, { recording, version,
       // A page served: the sign-in page answers 401 by design, so it counts as served too.
       if (trace.page && (status === 200 || (trace.page === 'signin' && status === 401))) {
         const team = readTeam(request);
-        trace.events.push({ at: trace.t0, kind: 'visit', sev: 'info', text: `Visited ${trace.pageName}`, page: trace.page, team });
+        // The sign-in page is open to anyone who asks, scanners included, so it is counted below and never stored
+        // one entry a visit: only pages past the password gate are recorded as visits.
+        if (trace.page !== 'signin') trace.events.push({ at: trace.t0, kind: 'visit', sev: 'info', text: `Visited ${trace.pageName}`, page: trace.page, team });
         // Member settings seen on visits: counts only, never tied to the team.
         const s = b.settings;
         const theme = cookieValue(request, 'eft_theme') === 'light' ? 'light' : 'dark';
