@@ -164,11 +164,18 @@ export function makeSources(deps) {
     }),
     /** Hour rows of the log, newest last, for the last `n` hours. */
     hours: (n = 48) => once(`hours:${n}`, () => {
-      const from = hourOf(Date.now()) - (n - 1) * 3600000;
-      return deps.q('SELECT hour, data FROM hours WHERE hour >= ? ORDER BY hour', from).map((r) => {
-        let d = {}; try { d = JSON.parse(r.data); } catch { d = {}; }
-        return { hour: r.hour, d };
-      });
+      // The last three hours can still change and are read every time; the older ones are read once in ten minutes.
+      const nowH = hourOf(Date.now());
+      const from = nowH - (n - 1) * 3600000, live = nowH - 2 * 3600000;
+      const parse = (r) => { let d = {}; try { d = JSON.parse(r.data); } catch { d = {}; } return { hour: r.hour, d }; };
+      const key = `hours-old:${n}`, kept = deps.cache.get(key);
+      let older;
+      if (kept && kept.v.from === from && Date.now() - kept.at < 600000) older = kept.v.rows;
+      else {
+        older = from < live ? deps.q('SELECT hour, data FROM hours WHERE hour >= ? AND hour < ? ORDER BY hour', from, live).map(parse) : [];
+        deps.cache.set(key, { at: Date.now(), v: { from, rows: older } });
+      }
+      return older.concat(deps.q('SELECT hour, data FROM hours WHERE hour >= ? ORDER BY hour', Math.max(from, live)).map(parse));
     }),
     meter: () => deps.meter(),
   };
@@ -369,7 +376,8 @@ export function compileWhere(where) {
 /** The log object's in-memory window, when it covers `since`. */
 function recentFor(src, since) {
   const r = src.deps.recent ? src.deps.recent() : null;
-  return r && since >= r.from ? r : null;
+  // A window cut at its row limit answers only for the time it covers; older asks go to the table.
+  return r && since >= r.from && (r.complete || (r.rows.length > 0 && since >= r.rows[0].at)) ? r : null;
 }
 
 const COLS = 'id, at, kind, sev, text, page, team, n';
