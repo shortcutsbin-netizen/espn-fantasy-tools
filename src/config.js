@@ -19,6 +19,7 @@
  */
 
 import { normaliseSiteApi, keyState } from './apikey.js';
+import { SESSION_STOPS, sessionHoursOf } from './auth.js';
 
 export const CONFIG_KEY = 'config:v1';
 
@@ -104,6 +105,10 @@ function normalise(raw) {
     toolVisibility: c.toolVisibility || {},
     /* The home page's tile order, when an administrator has arranged it; null means
        the default order. Made whole against the registry when read (tools.js). */
+    /* How long a sign-in lasts: one of SESSION_STOPS (hours, or 'infinite'); null means the default. */
+    sessionHours: SESSION_STOPS.includes(c.sessionHours) ? c.sessionHours : null,
+    /* Seconds since the epoch: sign-ins made before this moment no longer count (set when the League Password changes). */
+    sessionsFrom: Number.isFinite(c.sessionsFrom) ? c.sessionsFrom : null,
     toolOrder: Array.isArray(c.toolOrder) && c.toolOrder.length ? c.toolOrder.filter((k) => typeof k === 'string').slice(0, 40) : null,
     /* The league's own Trade Analyzer weighting, holding only the rows an
        administrator has an opinion about. Absent means "use the shipped
@@ -209,7 +214,7 @@ export async function saveConfig(env, patch) {
   const allowed = [
     'leagueId', 'espnS2', 'swid', 'season', 'leaguePrivate', 'historySeasons',
     'leaguePasswordHash', 'adminPasswordHash', 'sessionSecret', 'setupCompletedAt',
-    'toolVisibility', 'toolOrder', 'datasetsCheckedVersion', 'tradeWeights', 'fortuneTeller', 'stamps', 'siteApi',
+    'toolVisibility', 'toolOrder', 'sessionHours', 'sessionsFrom', 'datasetsCheckedVersion', 'tradeWeights', 'fortuneTeller', 'stamps', 'siteApi',
     'workersOrigin',
   ];
   for (const field of allowed) {
@@ -248,6 +253,7 @@ export function describeConfig(cfg) {
        new league starts with. */
     tradeWeights: cfg.tradeWeights || {},
     toolOrder: cfg.toolOrder || null,
+    sessionHours: sessionHoursOf(cfg),
     fortuneTeller: { enabled: Boolean(cfg.fortuneTeller && cfg.fortuneTeller.enabled) },
     // The switch, dates, interval and address setting; never anything that could rebuild a key.
     siteApi: describeSiteApi(cfg.siteApi),
