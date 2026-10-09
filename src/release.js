@@ -14,19 +14,14 @@
  * outside the repo would notice.
  */
 export const RELEASE_NOTE_ITEMS = [
-  'New tool: Site API. Your league\u2019s data for spreadsheets, scripts and phones, with step-by-step '
-  + 'guides for Google Sheets, Excel, Python, iPhone, Android, Home Assistant, Discord and more, and '
-  + 'downloads of every dataset. Every example keeps to the pace the site sets and stops itself if it '
-  + 'asks too often. Admin-only by default.',
-  'Live Matchups is made for following a game: a player whose game is on is lit up with the quarter, '
-  + 'the clock and the score, a dash marks a player yet to play, a bar shows points against projection, '
-  + 'and a brief +6.0 appears when points change. Highlights show each team\u2019s panels on its own side, '
-  + 'the optimal lineup gauges always sit level, and team names on the matchup card take the site\u2019s colours.',
-  'Trade Analyzer now judges every deal on real figures: each player\u2019s projection for the rest of the season, his '
-  + 'weeks so far, injuries, bye weeks, depth charts, your league\u2019s free agents and its playoff odds.',
-  'Site Configuration opens as a board of panels: choose one to open it.',
-  'If the site ever reaches one of Cloudflare\u2019s free daily limits, pages now say so and pick up again '
-  + 'by themselves.',
+  'The site now keeps running when it is flooded with requests. Signing in no longer depends on the activity log, '
+  + 'and the log limits how much of the day\u2019s allowance it can use.',
+  'Site Backend now steps down in stages as the day\u2019s allowance is used: panels built from the activity log '
+  + 'rest first, and everything else, the Overview included, carries on. Everything returns at 00:00 UTC.',
+  'The activity log no longer records visits to the sign-in page, or failed sign-ins with no team chosen, so bots '
+  + 'and scanners cannot fill it.',
+  'New in Site Configuration: Sign-in length. Whoever administers this site can choose how long a sign-in lasts, '
+  + 'from one hour to infinite. Changing the League Password signs everyone out.',
   'Various bug fixes and performance improvements.',
 ];
 
