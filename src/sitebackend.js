@@ -82,13 +82,35 @@ async function context(src) {
 
 // ---------------------------------------------------------------- panels
 
+/** What a resting panel says in place of its figures, by the tier that stopped it. */
+export function restText(tier, pct) {
+  return tier >= 2
+    ? `The site log has used ${pct}% of the day's reads it allows itself, so panels built from the activity log rest until 00:00 UTC. Panels built from the hourly counters, the datasets and the settings carry on.`
+    : `This panel needs activity the log no longer has in memory, and the log has used ${pct}% of the day's reads it allows itself, so it rests until 00:00 UTC. Nothing is lost: it is all still recorded.`;
+}
+
+/** The banner above a tab while the log is saving its reads; null at the start of the day. */
+export function restBanner(deps) {
+  const tier = deps.tier ? deps.tier() : 0;
+  if (!tier) return null;
+  const m = deps.meter();
+  const pct = Math.round(((m.read || 0) / LOG_BUDGET_REF.read) * 100);
+  return { tier, pct, text: tier >= 2
+    ? `The site log has used ${pct}% of the day's reads it allows itself, so the panels that read the activity log are resting${tier >= 3 ? ' and the rest of this page updates once a minute' : ''}. Everything returns at 00:00 UTC.`
+    : `The site log has used ${pct}% of the day's reads it allows itself, so it reads no more of the activity table today. Panels that need what is already in memory carry on; the others rest until 00:00 UTC.` };
+}
+
 async function runPanels(src, ctx, defs, open) {
   const out = [];
   for (const def of defs) {
     const p = { id: def.id, title: def.title, sub: def.sub || null, live: Boolean(def.live), asof: def.asof || null };
-    try { p.sum = await def.sum(src, ctx); } catch (err) { p.sum = ['warn', 'could not be read just now']; p.error = String((err && err.message) || err).slice(0, 160); }
+    try { p.sum = await def.sum(src, ctx); } catch (err) {
+      if (err && err.logPaused) { p.sum = ['idle', 'resting until 00:00 UTC']; p.rest = err.tier; } else { p.sum = ['warn', 'could not be read just now']; p.error = String((err && err.message) || err).slice(0, 160); }
+    }
     if (open.has(def.id) || open.has('*')) {
-      try { p.body = await def.body(src, ctx); } catch (err) { p.body = [B.empty('This panel could not be read just now. It tries again on the next refresh.')]; p.error = String((err && err.message) || err).slice(0, 160); }
+      try { p.body = await def.body(src, ctx); } catch (err) {
+        if (err && err.logPaused) { p.body = [B.empty(restText(err.tier, err.pct))]; p.rest = err.tier; } else { p.body = [B.empty('This panel could not be read just now. It tries again on the next refresh.')]; p.error = String((err && err.message) || err).slice(0, 160); }
+      }
     }
     out.push(p);
   }
@@ -200,7 +222,7 @@ function activityStrip(src) {
       ['Entries', C.n(r.n || 0)],
       ['First entry', r.first ? C.time(r.first) : '—'],
       ['Store', C.bytes(src.deps.size(), 'of 1 GB')],
-      ['Budget today', C.pct(Math.max(m.rows / LOG_BUDGET_REF.rows, m.req / LOG_BUDGET_REF.requests), m.paused ? 'reached: counters paused until 00:00 UTC' : null)],
+      ['Budget today', C.pct(Math.max(m.rows / LOG_BUDGET_REF.rows, m.req / LOG_BUDGET_REF.requests, (m.read || 0) / LOG_BUDGET_REF.read), m.paused ? 'reached: counters paused until 00:00 UTC' : (m.read || 0) >= LOG_BUDGET_REF.read ? 'reads reached: panels that read the events pause until 00:00 UTC' : null)],
     ],
   };
 }
@@ -277,12 +299,18 @@ export async function assembleTab(deps, params = {}) {
     ],
     pages: PAGES.map((p) => [p.key, p.name]),
     budget: src.meter().paused ? 'paused' : null,
+    rest: restBanner(deps),
   };
   let payload;
   if (tab === 'overview') {
     payload = { ...base, strip: await strip(src, ctx), panels: await runPanels(src, ctx, OVERVIEW, open) };
   } else if (tab === 'activity') {
-    payload = { ...base, strip: activityStrip(src), panels: [], feed: activityFeed(src, params) };
+    let feed;
+    try { feed = activityFeed(src, params); } catch (err) {
+      if (!(err && err.logPaused)) throw err;
+      feed = { items: [], newestId: null, newestHour: null, oldestId: null, oldestAt: null, more: false, since: null, rest: restText(err.tier, err.pct) };
+    }
+    payload = { ...base, strip: activityStrip(src), panels: [], feed };
   } else if (tab === 'data') {
     payload = { ...base, strip: dataStrip(src, ctx), panels: await runPanels(src, ctx, DATA_LAYER, open) };
   } else {
@@ -439,9 +467,10 @@ export async function hourlyReports(deps, hour) {
   L('storage', 'ok', census ? `R2 holds ${fmtB(census.total.bytes)} in ${census.total.objects.toLocaleString('en-US')} objects` : 'No census yet');
 
   // The log itself
-  const evN = deps.q('SELECT COALESCE(SUM(n), 0) AS n FROM events WHERE at >= ? AND at < ?', hour, hour + 3600000)[0].n;
+  let evN = 0;
+  try { evN = deps.q('SELECT COALESCE(SUM(n), 0) AS n FROM events WHERE at >= ? AND at < ?', hour, hour + 3600000)[0].n; } catch { /* over the read budget: the hour's count is left out */ }
   const m = deps.meter();
-  L('log', m.paused ? 'warn' : 'ok', `${evN} entries this hour; store ${fmtB(deps.size())}; ${Math.round(Math.max(m.rows / LOG_BUDGET_REF.rows, m.req / LOG_BUDGET_REF.requests) * 100)}% of today's budget used`);
+  L('log', m.paused ? 'warn' : 'ok', `${evN} entries this hour; store ${fmtB(deps.size())}; ${Math.round(Math.max(m.rows / LOG_BUDGET_REF.rows, m.req / LOG_BUDGET_REF.requests, (m.read || 0) / LOG_BUDGET_REF.read) * 100)}% of today's budget used`);
 
   // A day that has just ended joins the usage history (sparklines and the month's R2 operations).
   if ((hour + 3600000) % DAY_MS === 0) {
