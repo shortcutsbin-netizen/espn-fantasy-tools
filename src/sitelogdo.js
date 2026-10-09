@@ -21,7 +21,7 @@
  */
 
 import { assembleTab, hourlyReports, runCensus, datasetDetail } from './sitebackend.js';
-import { LOG_BUDGET_REF, GUARD_BYTES } from './sblimits.js';
+import { LOG_BUDGET_REF, GUARD_BYTES, EVENTS_PER_DAY, WINDOW_ROWS, READ_TIERS } from './sblimits.js';
 import { meteredEnv } from './sitelog.js';
 import { BYTE_BUDGET } from './scoretimeline.js';
 import { levelFrom, BRAKE_OF, BRAKE_WORDS, LIMIT_WORDS } from './budget.js';
@@ -167,6 +167,7 @@ export class SiteLogDO {
     this.kinds = null;
     this.kindsDirty = false;
     this.lastTick = undefined;
+    this.devTier = null;
   }
 
   // ---------------------------------------------------------------- storage
@@ -242,6 +243,29 @@ export class SiteLogDO {
   }
 
   /**
+   * Rows read are shared by every object on the account (5 million a day, free plan), so the log keeps to a tenth
+   * of them. Past it the heavy reads stop (the window, the totals, the panels' queries) and writes carry on.
+   */
+  readsPaused() {
+    return this.readTier() >= 3;
+  }
+
+  /** 0 below the first tier, 1 and 2 as the read share fills, 3 once it is spent. */
+  readTier() {
+    // Dev only (a site with a developer token): a tier held for a while, so each can be looked at on the page.
+    if (this.devTier && Date.now() < this.devTier.until) return this.devTier.n;
+    const f = this.meterNow().read / LOG_BUDGET.read;
+    return f >= 1 ? 3 : f >= READ_TIERS[1] ? 2 : f >= READ_TIERS[0] ? 1 : 0;
+  }
+
+  /** The error a read throws when its tier has stopped it; a panel catches it and rests, the rest carry on. */
+  restError(tier) {
+    const e = new Error('resting to protect the day\'s free reads');
+    e.logPaused = true; e.tier = tier; e.pct = Math.round((this.meterNow().read / LOG_BUDGET.read) * 100);
+    return e;
+  }
+
+  /**
    * The meter and the per-kind totals are saved together, at most every five
    * minutes: an object evicted in between forgets a few minutes of its own count,
    * which costs far less than a row written on every request.
@@ -272,13 +296,19 @@ export class SiteLogDO {
 
   // ---------------------------------------------------------------- the in-memory window
 
-  /** The last eight days of events, oldest first; loaded once, then kept in step with every insert. */
+  /**
+   * The last eight days of events, oldest first; loaded when a panel first asks for them, then kept in step with
+   * every insert. Recording never loads it: a restarted object that only records reads nothing.
+   */
   recent() {
     const from = Date.now() - RECENT_MS;
     if (!this.recentWin) {
-      const rows = this.run('SELECT id, at, kind, sev, text, page, team, n FROM events WHERE at >= ? ORDER BY id', from);
+      // From the first tier on, a cold window is not loaded: empty and incomplete, nothing kept, so the next call tries again.
+      if (this.readTier() >= 1) return { from, rows: [], complete: false };
+      // The newest rows only: one load can never read more than WINDOW_ROWS, whatever the table holds.
+      const rows = this.run('SELECT * FROM (SELECT id, at, kind, sev, text, page, team, n FROM events WHERE at >= ? ORDER BY id DESC LIMIT ?) ORDER BY id', from, WINDOW_ROWS);
       const oldest = this.one('SELECT MIN(at) AS at FROM events');
-      this.recentWin = { from, rows, complete: !oldest || oldest.at == null || oldest.at >= from };
+      this.recentWin = { from, rows, complete: rows.length < WINDOW_ROWS && (!oldest || oldest.at == null || oldest.at >= from) };
     } else if (from - this.recentWin.from > 3600000) {
       const rows = this.recentWin.rows;
       let i = 0;
@@ -293,6 +323,8 @@ export class SiteLogDO {
     const k = this.getMeta('kinds', null);
     if (k) this.kinds = k;
     else {
+      // Rebuilding the totals reads the whole table: not once the tiers begin. They stay unsaved until it can.
+      if (this.readTier() >= 1) return {};
       this.kinds = {};
       for (const r of this.run('SELECT kind, SUM(n) AS n FROM events GROUP BY kind')) this.kinds[r.kind] = r.n;
       this.kindsDirty = true;
@@ -306,9 +338,14 @@ export class SiteLogDO {
     const at = Number(e.at) || Date.now();
     const team = e.team == null ? null : Number(e.team);
     if (e.kind === 'sign-in' && e.text === 'Session lapsed') {
-      const win = this.recent();
-      const h = hourOf(at);
-      if (win.rows.some((r) => r.kind === 'sign-in' && r.text === 'Session lapsed' && r.team === team && r.at >= h)) return;
+      // Asked of the table by its time index, which reads only this hour's entries: never the whole window.
+      if (this.one("SELECT 1 AS x FROM events WHERE at >= ? AND kind = 'sign-in' AND text = 'Session lapsed' AND team IS ? LIMIT 1", hourOf(at), team)) return;
+    }
+    // A day's cap on stored events: past it a new one is counted and dropped, except a failure.
+    const meter = this.meterNow();
+    if (e.sev !== 'bad') {
+      if ((meter.events || 0) >= EVENTS_PER_DAY) { meter.dropped = (meter.dropped || 0) + 1; return; }
+      meter.events = (meter.events || 0) + 1;
     }
     const row = {
       at, kind: String(e.kind || 'change').slice(0, 20), sev: String(e.sev || 'info').slice(0, 8), text: String(e.text || '').slice(0, 160),
@@ -378,7 +415,6 @@ export class SiteLogDO {
     const events = Array.isArray(body.events) ? body.events.slice(0, 300) : [];
     const hours = Array.isArray(body.hours) ? body.hours.slice(0, 4) : [];
     this.transaction(() => {
-      this.recent();
       for (const e of events) this.insertEvent(e);
       this.noteSources(hours);
       if (!this.paused()) {
@@ -569,7 +605,6 @@ export class SiteLogDO {
     const hour = hourOf(at);
     let reportHour = null;
     this.transaction(() => {
-      this.recent();
       for (const e of (body.events || []).slice(0, 300)) this.insertEvent(e);
       const last = this.lastTickMinute();
       if (last != null && minute - last >= 3 * 60000) {
@@ -598,6 +633,7 @@ export class SiteLogDO {
       this.checkBudget();
       this.saveMeter();
     });
+    this.cleanupAnonymous();
     // Outside the transaction: these read other stores.
     const census = this.getMeta('census', null);
     if (!census || at - Date.parse(census.at) >= CENSUS_EVERY_MS) {
@@ -619,6 +655,25 @@ export class SiteLogDO {
       } catch { /* a missed report is shown as missing, never invented */ }
     }
     return { ok: true };
+  }
+
+  /**
+   * Once: the sign-in visits and team-less sign-in entries a scanner left behind are removed, so the window and the
+   * panels stop reading them. It is marked done only when it succeeded; a day's read limit already spent just
+   * means it is tried again on the next tick, which is how it completes by itself after 00:00 UTC.
+   */
+  cleanupAnonymous() {
+    try {
+      if (this.getMeta('cleanup-signin-v1', false) || this.readsPaused()) return;
+      this.transaction(() => {
+        this.run("DELETE FROM events WHERE kind = 'visit' AND page = 'signin'");
+        this.run("DELETE FROM events WHERE kind = 'sign-in' AND team IS NULL");
+        this.run("DELETE FROM meta WHERE k = 'kinds'");
+        this.kinds = null; this.kindsDirty = false; this.recentWin = null;
+        this.setMeta('cleanup-signin-v1', true);
+        this.change('Sign-in visits with no team chosen were cleared from the log (the site no longer records them)', 'info', 'signin');
+      });
+    } catch { /* tried again on the next tick */ }
   }
 
   /** Logo fetches that start or stop failing, from the logo pass the cron ran. */
@@ -681,7 +736,6 @@ export class SiteLogDO {
       return { ok: true, counted: false };
     }
     this.transaction(() => {
-      this.recent();
       this.insertEvent({ at: now, kind: body.limit ? 'change' : 'operation', sev: body.limit ? 'bad' : 'info', text: body.text, page: body.page, team: body.team });
       // The cutoff's record (C6): when pages first saw Cloudflare's limit page and when they were answered again,
       // for the home page's note the next day. The earliest sighting in the last day is kept.
@@ -705,11 +759,22 @@ export class SiteLogDO {
       env: this.env,
       facts,
       cache: this.cache,
-      q: (query, ...b) => this.run(query, ...b),
+      // From the first tier, nothing new is read from the events table (a lone MIN or MAX is one index step, and allowed).
+      q: (query, ...b) => {
+        const tier = this.readTier();
+        if (tier >= 1 && /\bFROM\s+events\b/i.test(query) && !/^\s*SELECT\s+(MIN|MAX)\(/i.test(query)) throw this.restError(tier);
+        return this.run(query, ...b);
+      },
+      tier: () => this.readTier(),
       meta: (k, f) => (k === 'kinds' ? { ...this.loadKinds() } : this.getMeta(k, f)),
       meter: () => ({ ...this.meterNow(), budget: LOG_BUDGET, paused: this.paused() }),
       size: () => this.size(),
-      recent: () => this.recent(),
+      // The window answers for free once it is in memory (tier 1); from the second tier its panels rest.
+      recent: () => {
+        const tier = this.readTier();
+        if (tier >= 2 || (tier === 1 && !this.recentWin)) throw this.restError(tier);
+        return this.recent();
+      },
       pace: () => this.paceUsage(),
     };
   }
@@ -730,8 +795,32 @@ export class SiteLogDO {
         case '/tick': return json(await this.tick(body));
         case '/client': return json(this.clientEvent(body));
         case '/pace': return json({ ok: true, pace: this.paceUsage() });
+        case '/devtier': {
+          if (!this.env.DEV_TOKEN) return json({ ok: false, error: 'unknown log route' }, 404);
+          const n = Number(body.tier);
+          if (body.cold) this.recentWin = null;
+          this.devTier = n >= 0 && n <= 3 && body.minutes > 0 ? { n, until: Date.now() + Math.min(180, Number(body.minutes)) * 60000 } : null;
+          return json({ ok: true, tier: this.readTier(), until: this.devTier ? new Date(this.devTier.until).toISOString() : null });
+        }
         case '/members': return json(this.members(body.aliases));
-        case '/tab': return json(await assembleTab(this.deps(body.facts || {}), body.params || {}));
+        case '/tab':
+        {
+          // The whole share spent: the panels built from the events rest (as at the second tier), the rest carry on,
+          // and each tab is answered from a copy at most a minute old, so the small reads that are left stay small.
+          const spent = this.readTier() >= 3;
+          const ck = spent ? JSON.stringify(body.params || {}) : null;
+          if (spent) {
+            const hit = this.tabCache && this.tabCache.get(ck);
+            if (hit && Date.now() - hit.at < 60000) return json(hit.out);
+          }
+          const out = await assembleTab(this.deps(body.facts || {}), body.params || {});
+          if (spent) {
+            if (!this.tabCache) this.tabCache = new Map();
+            if (this.tabCache.size >= 40) this.tabCache.clear();
+            this.tabCache.set(ck, { at: Date.now(), out });
+          }
+          return json(out);
+        }
         case '/dataset': return json(await datasetDetail(this.deps(body.facts || {}), body.key || url.searchParams.get('key')));
         case '/meta': {
           const r = this.one('SELECT MAX(id) AS n, MIN(at) AS first, MAX(at) AS last FROM events');
@@ -740,6 +829,7 @@ export class SiteLogDO {
         default: return json({ ok: false, error: 'unknown log route' }, 404);
       }
     } catch (err) {
+      if (err && err.logPaused && url.pathname === '/tab') return json({ ok: true, empty: true, paused: true });
       return json({ ok: false, error: String((err && err.message) || err) }, 500);
     }
   }
