@@ -56,7 +56,8 @@ async function usageOf(src, mid, isToday) {
   const ftm = peek && peek.meter && peek.meter.day === day ? peek.meter : { alarms: 0, rows: 0, wallMs: 0 };
   let dsReq = 0;
   for (const { d } of rows) for (const t of Object.values(d.ds || {})) dsReq += t.req || 0;
-  const signIns = countEvents(src, mid, "AND kind = 'sign-in'").n;
+  let signIns = 0;
+  try { signIns = countEvents(src, mid, "AND kind = 'sign-in'").n; } catch (err) { if (!(err && err.logPaused)) throw err; /* resting: left out of the estimate */ }
   let tlRows = 0;
   for (const t of Object.values(ticksOf(rows))) if (t && t.timeline && t.timeline.recorded) tlRows += 3;
   const doReq = sumOps(rows, (k) => k.startsWith('do:') && k !== 'do:SITE_LOG') + logM.req + (ftm.alarms || 0);
@@ -203,7 +204,7 @@ export async function strip(src, ctx) {
       ['ESPN credentials', ctx.espn.failing ? C.pill('bad', 'refused', null) : C.pill('ok', 'accepted')],
       ['Fortune Teller', ctx.ftp ? C.pill(ftSev(ctx.ftp.state), ctx.ftp.state, ctx.ftp.state === 'early' && ctx.ftp.opensAfterWeek ? `opens after week ${ctx.ftp.opensAfterWeek}` : null) : C.txt('not run yet')],
       ['Server errors, 24 h', C.n(ctx.errors24)],
-      ['Log budget today', C.pct(Math.max(src.meter().rows / LOG_BUDGET_REF.rows, src.meter().req / LOG_BUDGET_REF.requests), 'of the log\'s daily budget')],
+      ['Log budget today', C.pct(Math.max(src.meter().rows / LOG_BUDGET_REF.rows, src.meter().req / LOG_BUDGET_REF.requests, (src.meter().read || 0) / LOG_BUDGET_REF.read), 'of the log\'s daily budget')],
       ['Game window', ctx.window.open ? C.pill('run', 'open', ctx.window.closes ? null : null) : C.txt('closed', ctx.window.next ? null : 'no kickoff scheduled')],
       ['Next kickoff', ctx.window.next ? C.time(ctx.window.next) : '—'],
       ['Worker requests today', C.n(u.worker, 'estimate')],
