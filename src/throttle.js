@@ -103,17 +103,23 @@ export async function throttleCheck(env, request) {
     CAP.n += 1;
     if (CAP.n > PROTECT_SIGNINS_PER_MINUTE) return { blocked: true, busy: true, failures: 0, retryAfterSeconds: Math.max(1, Math.ceil(((m + 1) * 60000 - now) / 1000)) };
   }
-  const res = await stub(env, request).fetch('https://throttle/check');
-  return res.json();
+  // The throttle only slows a guesser down. If its object cannot answer (a Cloudflare daily limit spent, say), a
+  // sign-in must still work: the password is checked either way.
+  try {
+    const res = await stub(env, request).fetch('https://throttle/check');
+    return await res.json();
+  } catch { return { blocked: false, failures: 0, retryAfterSeconds: 0 }; }
 }
 
 export async function throttleFail(env, request) {
   if (!env.THROTTLE) return { blocked: false, failures: 0 };
-  const res = await stub(env, request).fetch('https://throttle/fail');
-  return res.json();
+  try {
+    const res = await stub(env, request).fetch('https://throttle/fail');
+    return await res.json();
+  } catch { return { blocked: false, failures: 0 }; }
 }
 
 export async function throttleSucceed(env, request) {
   if (!env.THROTTLE) return;
-  await stub(env, request).fetch('https://throttle/succeed');
+  try { await stub(env, request).fetch('https://throttle/succeed'); } catch { /* nothing to clear */ }
 }
