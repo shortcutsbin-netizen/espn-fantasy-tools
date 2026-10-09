@@ -92,6 +92,20 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
           </div>
         </div>
 
+        <div class="panel p-sess">
+          <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-sess"><span class="t">Sign-in length</span><i class="cfgchev" aria-hidden="true"></i></button>
+          <div class="cfgbody" id="cb-sess" hidden>
+          <p class="hint">How long a member stays signed in before the League Password is asked for again.
+             A change applies from the next sign-in; people already signed in keep the length they were given.
+             Changing the League Password signs everyone out, whatever this says.</p>
+          <div class="sessrow">
+            <input id="sessSlide" class="wslide" type="range" min="0" max="10" step="1" value="3" aria-label="Sign-in length" aria-valuetext="8 hours">
+            <b id="sessVal" class="sessval">8 hours</b>
+          </div>
+          <div class="msg" id="msgSess"></div>
+          </div>
+        </div>
+
         <div class="panel p-api" id="cfgApi">
           <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-api"><span class="t">Site API</span><i class="cfgchev" aria-hidden="true"></i></button>
           <div class="cfgbody" id="cb-api" hidden>
@@ -288,6 +302,13 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
       box-shadow:0 0 0 1px var(--field); cursor:grab; }
     .wrow .wslide::-moz-range-thumb { width:10px; height:14px; border-radius:0;
       background:var(--accent); border:0; box-shadow:0 0 0 1px var(--field); }
+    .sessrow { display:flex; align-items:center; gap:14px; padding:8px 0 2px; }
+    .sessrow .wslide { flex:1 1 auto; min-width:120px; -webkit-appearance:none; appearance:none; height:16px; background:transparent; cursor:pointer; margin:0; }
+    .sessrow .wslide::-webkit-slider-runnable-track { height:3px; background:var(--line-2); }
+    .sessrow .wslide::-moz-range-track { height:3px; background:var(--line-2); }
+    .sessrow .wslide::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:10px; height:14px; margin-top:-5.5px; background:var(--accent); border:0; box-shadow:0 0 0 1px var(--field); cursor:grab; }
+    .sessrow .wslide::-moz-range-thumb { width:10px; height:14px; border-radius:0; background:var(--accent); border:0; box-shadow:0 0 0 1px var(--field); }
+    .sessval { flex:none; min-width:92px; text-align:right; font-size:13px; font-weight:900; font-variant-numeric:tabular-nums; color:var(--accent); }
     .wval { flex:none; width:44px; text-align:right; font-size:12px; font-weight:900;
       font-variant-numeric:tabular-nums; color:var(--accent); }
     .wdef { flex:none; width:82px; text-align:right; font-size:9px; font-weight:800;
@@ -362,6 +383,7 @@ function render(r) {
   set('swidstate', c.swidPresent ? (c.swidWellFormed ? 'Set' : 'Set, malformed') : 'Not set');
   renderTools(r.tools || []);
   renderOrder(r.order || { tiles: [], custom: false });
+  renderSession(c.sessionHours);
   renderWeights((r.config || {}).tradeWeights || {});
   renderHistory(r.history || {});
   renderPrime(r.prime || {});
@@ -469,6 +491,32 @@ document.getElementById('orderRows').addEventListener('click', async function (e
   var r = await call('/api/admin/tool-order', { order: keys });
   note('msgOrder', r.ok ? 'Saved.' : (r.error || 'Could not save.'), r.ok ? 'ok' : 'err');
   if (r.ok && r.order) renderOrder(r.order, { key: key, dir: dir });
+});
+
+var SESS_STOPS = [1, 2, 4, 8, 12, 24, 72, 168, 720, 2160, 'infinite'];
+function sessWords(h) {
+  if (h === 'infinite') return 'Infinite';
+  if (h < 24) return h + (h === 1 ? ' hour' : ' hours');
+  var d = h / 24;
+  return d + (d === 1 ? ' day' : ' days');
+}
+function renderSession(h) {
+  var i = SESS_STOPS.indexOf(h);
+  var slide = document.getElementById('sessSlide');
+  slide.value = String(i < 0 ? 3 : i);
+  document.getElementById('sessVal').textContent = sessWords(SESS_STOPS[Number(slide.value)]);
+  slide.setAttribute('aria-valuetext', sessWords(SESS_STOPS[Number(slide.value)]));
+}
+document.getElementById('sessSlide').addEventListener('input', function (e) {
+  var w = sessWords(SESS_STOPS[Number(e.target.value)]);
+  document.getElementById('sessVal').textContent = w;
+  e.target.setAttribute('aria-valuetext', w);
+});
+document.getElementById('sessSlide').addEventListener('change', async function (e) {
+  var h = SESS_STOPS[Number(e.target.value)];
+  var r = await call('/api/admin/session-length', { hours: h });
+  note('msgSess', r.ok ? 'Saved. Applies from the next sign-in.' : (r.error || 'Could not save.'), r.ok ? 'ok' : 'err');
+  if (r.ok) renderSession(r.hours);
 });
 
 document.getElementById('orderReset').addEventListener('click', async function () {
@@ -819,15 +867,17 @@ async function call(url, body, pwOverride) {
        'Visible to the league, admin-only, or hidden. Admin-only tools still appear on the home page with a lock, so the league can see they exist. A tool that arrived in this release is marked New here and in the order below.'],
       ['04', 'Home page order',
        'Move a tile up or down and the home page follows at once. Reset puts the shipped order back. A tool that arrived in this release is marked New, so you can see where it landed; the home page\u2019s tiles never are.'],
-      ['05', 'Site API',
+      ['05', 'Sign-in length',
+       'The slider sets how long a member stays signed in before the League Password is asked for again, from one hour to infinite. It applies from the next sign-in. Changing the League Password signs everyone out.'],
+      ['06', 'Site API',
        'Switch the API on or off, see when the key started and when it next changes, replace it now (gently, or at once after a leak), choose how often it is replaced, and whether it may travel in an address. The key itself is on the Site API page.'],
-      ['06', 'Trade Analyzer weighting',
+      ['07', 'Trade Analyzer weighting',
        'Sets what each statistic is worth when the tool judges a deal for your league. Anyone can still move the adjustable ones while they look at a trade; that never changes what you save here.'],
-      ['07', 'Fortune Teller',
+      ['08', 'Fortune Teller',
        'Switch it on and it builds the map by itself as soon as the league is close enough to the end of the regular season, then moves on each week. Check now asks it to look straight away; Rebuild starts the map again from scratch.'],
-      ['08', 'Re-run a pull any time',
+      ['09', 'Re-run a pull any time',
        'Refreshing league data, and re-pulling past seasons, can both be run again whenever you like. Neither loses anything by being repeated.'],
-      ['09', 'Time zone is per person',
+      ['10', 'Time zone is per person',
        'The zone under the gear is yours alone, not a league setting. Everyone picks their own.'],
     ] });
 }
